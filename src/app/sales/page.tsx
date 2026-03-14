@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ArrowLeft, Construction } from "lucide-react";
+import Image from "next/image";
+import { ArrowLeft } from "lucide-react";
 
 export default function SalesPage() {
   return (
@@ -16,12 +17,16 @@ export default function SalesPage() {
 
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center flex flex-col items-center gap-4">
-          <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-accent/10">
-            <Construction className="w-8 h-8 text-brand-accent" />
-          </div>
+          <Image
+            src="/north-star-logo.png"
+            alt="North Star Solutions"
+            width={64}
+            height={64}
+            style={{ height: 64, width: "auto" }}
+          />
           <div>
             <h1 className="font-montserrat font-bold text-xl text-brand-headline mb-2">
-              Sales & Pipeline
+              Sales &amp; Pipeline
             </h1>
             <p className="font-opensans text-sm text-brand-muted">
               Coming soon — this dashboard is under construction
