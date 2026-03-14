@@ -1,23 +1,10 @@
-// ─── localStorage persistence layer ──────────────────────────────
-// Replaces the Express/SQLite backend entirely.
-// All data lives in the browser — no server needed.
+// ─── Supabase persistence layer ───────────────────────────────────
+// All data is stored in Supabase, tied to the logged-in user.
+// Row Level Security ensures users only ever see their own data.
 
-const ENTRIES_KEY = 'ads_entries'
-const SETTINGS_KEY = 'ads_settings'
+import { supabase } from './supabase'
 
 // ─── Helpers ──────────────────────────────────────────────────────
-
-function loadEntries() {
-  try {
-    return JSON.parse(localStorage.getItem(ENTRIES_KEY) || '[]')
-  } catch {
-    return []
-  }
-}
-
-function saveEntries(entries) {
-  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries))
-}
 
 function computeMetrics(entry) {
   return {
@@ -51,88 +38,101 @@ function aggregateEntries(rows) {
   }
 }
 
+function throwIfError(error) {
+  if (error) throw new Error(error.message)
+}
+
 // ─── Entries ──────────────────────────────────────────────────────
 
-export function getEntries() {
-  return loadEntries()
-    .map(computeMetrics)
-    .sort((a, b) => b.date.localeCompare(a.date))
+export async function getEntries() {
+  const { data, error } = await supabase
+    .from('entries')
+    .select('*')
+    .order('date', { ascending: false })
+  throwIfError(error)
+  return (data || []).map(computeMetrics)
 }
 
-export function getEntryByDate(date) {
-  const entry = loadEntries().find(e => e.date === date)
-  return entry ? computeMetrics(entry) : null
+export async function getEntryByDate(date) {
+  const { data, error } = await supabase
+    .from('entries')
+    .select('*')
+    .eq('date', date)
+    .maybeSingle()
+  throwIfError(error)
+  return data ? computeMetrics(data) : null
 }
 
-export function createEntry({ date, amount_spent, link_clicks, leads, calls }) {
-  const entries = loadEntries()
-  if (entries.find(e => e.date === date)) {
-    throw new Error('Entry already exists for this date')
-  }
-  const entry = {
-    id: Date.now(),
-    date,
-    amount_spent: amount_spent ?? null,
-    link_clicks: link_clicks ?? null,
-    leads: leads ?? null,
-    calls: calls ?? null,
-    created_at: new Date().toISOString()
-  }
-  entries.push(entry)
-  saveEntries(entries)
-  return computeMetrics(entry)
+export async function createEntry({ date, amount_spent, link_clicks, leads, calls }) {
+  const { data, error } = await supabase
+    .from('entries')
+    .insert({ date, amount_spent, link_clicks, leads, calls })
+    .select()
+    .single()
+  throwIfError(error)
+  return computeMetrics(data)
 }
 
-export function updateEntry(date, { amount_spent, link_clicks, leads, calls }) {
-  const entries = loadEntries()
-  const idx = entries.findIndex(e => e.date === date)
-  if (idx === -1) throw new Error('Entry not found')
-  entries[idx] = {
-    ...entries[idx],
-    amount_spent: amount_spent ?? null,
-    link_clicks: link_clicks ?? null,
-    leads: leads ?? null,
-    calls: calls ?? null
-  }
-  saveEntries(entries)
-  return computeMetrics(entries[idx])
+export async function updateEntry(date, { amount_spent, link_clicks, leads, calls }) {
+  const { data, error } = await supabase
+    .from('entries')
+    .update({ amount_spent, link_clicks, leads, calls })
+    .eq('date', date)
+    .select()
+    .single()
+  throwIfError(error)
+  return computeMetrics(data)
 }
 
-export function deleteEntry(date) {
-  const entries = loadEntries()
-  const filtered = entries.filter(e => e.date !== date)
-  if (filtered.length === entries.length) throw new Error('Entry not found')
-  saveEntries(filtered)
+export async function deleteEntry(date) {
+  const { error } = await supabase
+    .from('entries')
+    .delete()
+    .eq('date', date)
+  throwIfError(error)
 }
 
 // ─── Summary ──────────────────────────────────────────────────────
 
-export function getMonthlySummary(month) {
-  const rows = loadEntries().filter(e => e.date.startsWith(month))
-  return aggregateEntries(rows)
+export async function getMonthlySummary(month) {
+  const { data, error } = await supabase
+    .from('entries')
+    .select('*')
+    .like('date', `${month}%`)
+  throwIfError(error)
+  return aggregateEntries(data || [])
 }
 
-export function getWeeklySummary() {
+export async function getWeeklySummary() {
   const weekAgo = new Date()
   weekAgo.setDate(weekAgo.getDate() - 6)
   const weekAgoStr = weekAgo.toISOString().split('T')[0]
-  const rows = loadEntries().filter(e => e.date >= weekAgoStr)
-  return aggregateEntries(rows)
+  const { data, error } = await supabase
+    .from('entries')
+    .select('*')
+    .gte('date', weekAgoStr)
+  throwIfError(error)
+  return aggregateEntries(data || [])
 }
 
 // ─── Settings ─────────────────────────────────────────────────────
 
-export function getSettings() {
-  try {
-    return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')
-  } catch {
-    return {}
+export async function getSettings() {
+  const { data, error } = await supabase
+    .from('settings')
+    .select('key, value')
+  throwIfError(error)
+  const settings = {}
+  for (const row of (data || [])) {
+    try { settings[row.key] = JSON.parse(row.value) } catch { settings[row.key] = row.value }
   }
+  return settings
 }
 
-export function saveSetting(key, value) {
-  const settings = getSettings()
-  settings[key] = value
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+export async function saveSetting(key, value) {
+  const { error } = await supabase
+    .from('settings')
+    .upsert({ key, value: JSON.stringify(value) }, { onConflict: 'user_id,key' })
+  throwIfError(error)
   return { key, value }
 }

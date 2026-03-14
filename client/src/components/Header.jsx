@@ -1,6 +1,6 @@
 import React from 'react'
 
-export default function Header({ period, onPeriodChange, onOpenSettings }) {
+export default function Header({ period, onPeriodChange, onOpenSettings, userEmail, onSignOut }) {
   return (
     <header className="app-header">
       <div className="header-inner">
@@ -33,6 +33,17 @@ export default function Header({ period, onPeriodChange, onOpenSettings }) {
             </svg>
             Settings
           </button>
+
+          {userEmail && (
+            <div className="header-user">
+              <span className="header-user-email text-muted">{userEmail}</span>
+              <button className="btn btn-ghost btn-sm" onClick={onSignOut} title="Sign out">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

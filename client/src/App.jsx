@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react'
 import './components/components.css'
 
 import dayjs from 'dayjs'
+import { supabase } from './supabase'
+import AuthPage from './components/AuthPage'
 import Header from './components/Header'
 import MetricCard from './components/MetricCard'
 import DailyInputForm from './components/DailyInputForm'
@@ -72,6 +74,7 @@ function aggregateForPeriod(entries, period) {
 
 // ─── App ───────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(undefined) // undefined = loading, null = logged out
   const [period, setPeriod] = useState('daily')
   const [entries, setEntries] = useState([])
   const [settings, setSettings] = useState({})
@@ -80,6 +83,17 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editEntry, setEditEntry] = useState(null)
   const { toasts, addToast } = useToast()
+
+  // ─── Auth state ────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
 
   const loadData = useCallback(async () => {
     try {
@@ -155,12 +169,29 @@ export default function App() {
   }
 
   // ─── Render ──────────────────────────────────────────────────────
+
+  // Auth loading
+  if (session === undefined) {
+    return (
+      <div className="loading-screen" style={{ minHeight: '100vh' }}>
+        <div className="loading-spinner" />
+      </div>
+    )
+  }
+
+  // Not logged in
+  if (!session) {
+    return <AuthPage />
+  }
+
   return (
     <div className="app-layout">
       <Header
         period={period}
         onPeriodChange={setPeriod}
         onOpenSettings={() => setSettingsOpen(true)}
+        userEmail={session.user.email}
+        onSignOut={() => supabase.auth.signOut()}
       />
 
       <main className="main-content">
