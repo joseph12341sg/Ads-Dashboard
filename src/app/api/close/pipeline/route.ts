@@ -14,6 +14,17 @@ function setCache(key: string, data: unknown) {
   cache.set(key, { data, ts: Date.now() });
 }
 
+/* ── Case-insensitive trimmed matching ── */
+function isMatch(actual: string | undefined | null, expected: string): boolean {
+  if (!actual) return false;
+  return actual.trim().toLowerCase() === expected.trim().toLowerCase();
+}
+
+function containsMatch(actual: string | undefined | null, substring: string): boolean {
+  if (!actual) return false;
+  return actual.trim().toLowerCase().includes(substring.trim().toLowerCase());
+}
+
 /* ── Auth headers ── */
 function getHeaders() {
   const apiKey = process.env.CLOSE_API_KEY;
@@ -54,16 +65,83 @@ async function fetchAllPages(
   return allResults;
 }
 
-/* ── Count-only fetch (uses _limit=0 for total_results) ── */
-async function fetchCount(
-  baseUrl: string,
+/* ── Pipeline configuration (cached permanently after first fetch) ── */
+interface PipelineConfig {
+  setting_status_ids: Set<string>;
+  closer_pipeline_id: string;
+  closer_status_map: Record<string, string>;
+}
+
+let pipelineConfig: PipelineConfig | null = null;
+
+async function getPipelineConfig(
   headers: Record<string, string>
-): Promise<number> {
-  const separator = baseUrl.includes("?") ? "&" : "?";
-  const res = await fetch(`${baseUrl}${separator}_limit=0`, { headers });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
-  return json.total_results ?? 0;
+): Promise<PipelineConfig> {
+  if (pipelineConfig) return pipelineConfig;
+
+  // Fetch lead statuses to find "00 | Inbound Pipeline" statuses
+  const leadRes = await fetch("https://api.close.com/api/v1/status/lead/", {
+    headers,
+  });
+  const leadData = await leadRes.json();
+
+  const settingStatusIds = new Set<string>();
+  if (leadData.data && Array.isArray(leadData.data)) {
+    for (const status of leadData.data) {
+      const pipelineName = (status.pipeline_name ?? "") as string;
+      if (
+        containsMatch(pipelineName, "Inbound Pipeline") ||
+        containsMatch(pipelineName, "00 |")
+      ) {
+        settingStatusIds.add(status.id as string);
+      }
+    }
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log(
+      `[Close] Found ${settingStatusIds.size} lead statuses for Inbound Pipeline`
+    );
+  }
+
+  // Fetch opportunity pipelines to find "02 | Sales Pipeline"
+  const pipelinesRes = await fetch("https://api.close.com/api/v1/pipeline/", {
+    headers,
+  });
+  const pipelinesData = await pipelinesRes.json();
+
+  let closerPipelineId = "";
+  const closerStatusMap: Record<string, string> = {};
+
+  if (pipelinesData.data && Array.isArray(pipelinesData.data)) {
+    for (const pipeline of pipelinesData.data) {
+      const name = (pipeline.name ?? "") as string;
+      if (containsMatch(name, "Sales Pipeline") || containsMatch(name, "02 |")) {
+        closerPipelineId = pipeline.id as string;
+
+        if (pipeline.statuses && Array.isArray(pipeline.statuses)) {
+          for (const s of pipeline.statuses) {
+            closerStatusMap[s.id as string] = s.label as string;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log(
+      `[Close] Sales Pipeline ID: ${closerPipelineId}, statuses: ${Object.keys(closerStatusMap).length}`
+    );
+  }
+
+  pipelineConfig = {
+    setting_status_ids: settingStatusIds,
+    closer_pipeline_id: closerPipelineId,
+    closer_status_map: closerStatusMap,
+  };
+
+  return pipelineConfig;
 }
 
 /* ── Build date filter query params ── */
@@ -88,30 +166,45 @@ export async function GET(request: NextRequest) {
 
   const start = request.nextUrl.searchParams.get("start");
   const end = request.nextUrl.searchParams.get("end");
-  const isAllTime = !start || !end;
 
   const cacheKey = `pipeline:${start ?? "all"}:${end ?? "all"}`;
   const cached = getCached(cacheKey);
   if (cached) return NextResponse.json(cached);
 
   try {
+    // Fetch pipeline config (cached after first call)
+    const config = await getPipelineConfig(headers);
+
     const df = dateFilter(start, end);
     const wdf = wonDateFilter(start, end);
-    const ampDf = df ? `&${df}` : "";
-    const qDf = df ? `?${df}` : "";
-    const ampWdf = wdf ? `&${wdf}` : "";
 
-    // 1. Fetch dials count (outbound calls)
+    // 1. Fetch dials (ALL outbound calls — not pipeline-specific)
     const dialsUrl = df
       ? `https://api.close.com/api/v1/activity/call/?${df}&direction=outbound`
       : `https://api.close.com/api/v1/activity/call/?direction=outbound`;
-    const total_dials = await fetchCount(dialsUrl, headers);
+    const allCalls = await fetchAllPages(dialsUrl, headers);
+    // Client-side filter for outbound direction as safety
+    const total_dials = allCalls.filter(
+      (c) => (c.direction as string)?.toLowerCase() === "outbound"
+    ).length;
 
-    // 2. Fetch lead status changes
+    // 2. Fetch lead status changes — filter to Inbound Pipeline only
     const leadChangesUrl = df
       ? `https://api.close.com/api/v1/activity/status_change/lead/?${df}`
       : `https://api.close.com/api/v1/activity/status_change/lead/`;
-    const leadChanges = await fetchAllPages(leadChangesUrl, headers);
+    const allLeadChanges = await fetchAllPages(leadChangesUrl, headers);
+
+    // Filter to only Inbound Pipeline statuses
+    const leadChanges = config.setting_status_ids.size > 0
+      ? allLeadChanges.filter((change) => {
+          const newId = change.new_status_id as string;
+          const oldId = change.old_status_id as string;
+          return (
+            config.setting_status_ids.has(newId) ||
+            config.setting_status_ids.has(oldId)
+          );
+        })
+      : allLeadChanges; // Fallback: use all if no pipeline config found
 
     const settingFunnel = {
       new_lead: 0,
@@ -122,20 +215,34 @@ export async function GET(request: NextRequest) {
     };
 
     for (const change of leadChanges) {
-      const label = change.new_status_label as string;
-      if (label === "New Lead") settingFunnel.new_lead++;
-      else if (label === "In Follow Up Sequence") settingFunnel.in_follow_up++;
-      else if (label === "Engaged (In Conversation)") settingFunnel.engaged++;
-      else if (label === "Follow Up Needed") settingFunnel.follow_up_needed++;
-      else if (label === "DQ/Not Interested")
+      const label = (change.new_status_label ?? "") as string;
+      if (isMatch(label, "New Lead")) settingFunnel.new_lead++;
+      else if (isMatch(label, "In Follow Up Sequence"))
+        settingFunnel.in_follow_up++;
+      else if (isMatch(label, "Engaged (In Conversation)"))
+        settingFunnel.engaged++;
+      else if (isMatch(label, "Follow Up Needed"))
+        settingFunnel.follow_up_needed++;
+      else if (isMatch(label, "DQ/Not Interested"))
         settingFunnel.dq_not_interested++;
     }
 
-    // 3. Fetch opportunity status changes
+    // 3. Fetch opportunity status changes — filter to Sales Pipeline only
     const oppChangesUrl = df
       ? `https://api.close.com/api/v1/activity/status_change/opportunity/?${df}`
       : `https://api.close.com/api/v1/activity/status_change/opportunity/`;
-    const oppChanges = await fetchAllPages(oppChangesUrl, headers);
+    const allOppChanges = await fetchAllPages(oppChangesUrl, headers);
+
+    // Filter to Sales Pipeline only using status IDs
+    const closerStatusIds = new Set(Object.keys(config.closer_status_map));
+    const oppChanges =
+      closerStatusIds.size > 0
+        ? allOppChanges.filter((change) => {
+            const newId = change.new_status_id as string;
+            const oldId = change.old_status_id as string;
+            return closerStatusIds.has(newId) || closerStatusIds.has(oldId);
+          })
+        : allOppChanges; // Fallback
 
     const closer = {
       call_1_scheduled: 0,
@@ -151,60 +258,52 @@ export async function GET(request: NextRequest) {
     };
 
     for (const change of oppChanges) {
-      const newLabel = change.new_status_label as string;
-      const oldLabel = change.old_status_label as string;
-      const newType = change.new_status_type as string;
+      const newLabel = ((change.new_status_label ?? "") as string).trim();
+      const oldLabel = ((change.old_status_label ?? "") as string).trim();
+      const newType = ((change.new_status_type ?? "") as string).trim();
 
-      // Call 1 Scheduled
-      if (newLabel === "Call 1 - Discovery Scheduled")
+      if (isMatch(newLabel, "Call 1 - Discovery Scheduled"))
         closer.call_1_scheduled++;
 
-      // Call 1 No Show
-      if (newLabel === "Call 1 - No Show") closer.call_1_no_show++;
+      if (isMatch(newLabel, "Call 1 - No Show")) closer.call_1_no_show++;
 
-      // Call 1 Sat: moved FROM "Call 1 - Discovery Scheduled" TO "Call 2 - Close Scheduled"
       if (
-        oldLabel === "Call 1 - Discovery Scheduled" &&
-        newLabel === "Call 2 - Close Scheduled"
+        isMatch(oldLabel, "Call 1 - Discovery Scheduled") &&
+        isMatch(newLabel, "Call 2 - Close Scheduled")
       )
         closer.call_1_sat++;
 
-      // Call 2 Scheduled
-      if (newLabel === "Call 2 - Close Scheduled") closer.call_2_scheduled++;
+      if (isMatch(newLabel, "Call 2 - Close Scheduled"))
+        closer.call_2_scheduled++;
 
-      // Call 2 No Show
-      if (newLabel === "Call 2 - No Show") closer.call_2_no_show++;
+      if (isMatch(newLabel, "Call 2 - No Show")) closer.call_2_no_show++;
 
-      // Call 2 Sat: moved FROM "Call 2 - Close Scheduled" TO any of: Follow Up, Nurture, won, lost
       if (
-        oldLabel === "Call 2 - Close Scheduled" &&
-        (newLabel === "Follow Up - Scheduled" ||
-          newLabel === "Nurture" ||
-          newType === "won" ||
-          newType === "lost")
+        isMatch(oldLabel, "Call 2 - Close Scheduled") &&
+        (isMatch(newLabel, "Follow Up - Scheduled") ||
+          isMatch(newLabel, "Nurture") ||
+          newType.toLowerCase() === "won" ||
+          newType.toLowerCase() === "lost")
       )
         closer.call_2_sat++;
 
-      // Closed Won
-      if (newType === "won") closer.closed_won++;
+      if (newType.toLowerCase() === "won") closer.closed_won++;
+      if (newType.toLowerCase() === "lost") closer.closed_lost++;
 
-      // Closed Lost
-      if (newType === "lost") closer.closed_lost++;
-
-      // Follow Up Scheduled
-      if (newLabel === "Follow Up - Scheduled") closer.follow_up_scheduled++;
-
-      // Nurture
-      if (newLabel === "Nurture") closer.nurture++;
+      if (isMatch(newLabel, "Follow Up - Scheduled"))
+        closer.follow_up_scheduled++;
+      if (isMatch(newLabel, "Nurture")) closer.nurture++;
     }
 
-    // Appointments booked = call 1 scheduled
     const appointments_booked = closer.call_1_scheduled;
 
-    // 4. Fetch won opportunities for revenue
+    // 4. Fetch won opportunities — filter to Sales Pipeline
+    const wonBaseUrl = config.closer_pipeline_id
+      ? `https://api.close.com/api/v1/opportunity/?pipeline_id=${config.closer_pipeline_id}&status_type=won`
+      : `https://api.close.com/api/v1/opportunity/?status_type=won`;
     const wonUrl = wdf
-      ? `https://api.close.com/api/v1/opportunity/?status_type=won&${wdf}&_fields=value,lead_name,date_won,status_label`
-      : `https://api.close.com/api/v1/opportunity/?status_type=won&_fields=value,lead_name,date_won,status_label`;
+      ? `${wonBaseUrl}&${wdf}&_fields=value,lead_name,date_won,status_label`
+      : `${wonBaseUrl}&_fields=value,lead_name,date_won,status_label`;
     const wonOpps = await fetchAllPages(wonUrl, headers);
 
     let cash_collected = 0;
@@ -213,20 +312,20 @@ export async function GET(request: NextRequest) {
     }
     cash_collected = Math.round(cash_collected / 100);
 
-    // 5. Fetch active pipeline value
-    const allActive = await fetchAllPages(
-      `https://api.close.com/api/v1/opportunity/?status_type=active&_fields=value`,
-      headers
-    );
+    // 5. Fetch active pipeline value — filter to Sales Pipeline
+    const activeBaseUrl = config.closer_pipeline_id
+      ? `https://api.close.com/api/v1/opportunity/?pipeline_id=${config.closer_pipeline_id}&status_type=active&_fields=value`
+      : `https://api.close.com/api/v1/opportunity/?status_type=active&_fields=value`;
+    const allActive = await fetchAllPages(activeBaseUrl, headers);
     const pipeline_value = Math.round(
       allActive.reduce((sum, o) => sum + ((o.value as number) ?? 0), 0) / 100
     );
 
-    // 6. Fetch recent deals
-    const recentRes = await fetch(
-      `https://api.close.com/api/v1/opportunity/?_order_by=-date_updated&_fields=value,lead_name,status_label,status_type,date_won,date_updated&_limit=10`,
-      { headers }
-    );
+    // 6. Fetch recent deals — filter to Sales Pipeline
+    const recentBaseUrl = config.closer_pipeline_id
+      ? `https://api.close.com/api/v1/opportunity/?pipeline_id=${config.closer_pipeline_id}&_order_by=-date_updated&_fields=value,lead_name,status_label,status_type,date_won,date_updated&_limit=10`
+      : `https://api.close.com/api/v1/opportunity/?_order_by=-date_updated&_fields=value,lead_name,status_label,status_type,date_won,date_updated&_limit=10`;
+    const recentRes = await fetch(recentBaseUrl, { headers });
     const recentJson = await recentRes.json();
     const recent_deals = (recentJson.data ?? []).map(
       (d: Record<string, unknown>) => ({
