@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import KpiCard from "./KpiCard";
 import { KPI_DATA } from "@/lib/constants";
 import { createClient } from "@/lib/supabase/client";
+import type { Client } from "@/lib/clients/types";
 
 function generateSparklinePath(values: number[]): string {
   if (values.length === 0) return "";
@@ -21,15 +22,33 @@ function generateSparklinePath(values: number[]): string {
     .join(" ");
 }
 
+function formatGbp(value: number): string {
+  if (value >= 1000) {
+    const k = value / 1000;
+    return "£" + k.toLocaleString("en-GB", { minimumFractionDigits: k % 1 === 0 ? 0 : 1, maximumFractionDigits: 1 }) + "k";
+  }
+  return "£" + value.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
 export default function KpiBar() {
+  // Cost per booked call (existing)
   const [costPerCall, setCostPerCall] = useState<number | null>(null);
-  const [trend, setTrend] = useState<{ text: string; direction: "up" | "down" | "neutral" }>({
+  const [cpcTrend, setCpcTrend] = useState<{ text: string; direction: "up" | "down" | "neutral" }>({
     text: "",
     direction: "neutral",
   });
-  const [sparklinePath, setSparklinePath] = useState("");
+  const [cpcSparkline, setCpcSparkline] = useState("");
+
+  // Revenue from Close CRM
+  const [revenue, setRevenue] = useState<number | null>(null);
+  const [wonDeals, setWonDeals] = useState<number | null>(null);
+
+  // Clients & MRR from Supabase
+  const [activeClients, setActiveClients] = useState<number | null>(null);
+  const [mrr, setMrr] = useState<number | null>(null);
 
   useEffect(() => {
+    // Fetch cost per booked call from Supabase
     async function fetchCostPerCall() {
       try {
         const supabase = createClient();
@@ -47,19 +66,16 @@ export default function KpiBar() {
 
         if (!data || data.length === 0) return;
 
-        // Calculate cost per call for each day
         const dailyCpc = data.map((r) => ({
           date: r.date,
           cpc: r.calls > 0 ? Number(r.amount_spent) / r.calls : null,
         }));
 
-        // Overall cost per call (total spend / total calls)
         const totalSpend = data.reduce((s, r) => s + Number(r.amount_spent), 0);
         const totalCalls = data.reduce((s, r) => s + r.calls, 0);
         const overallCpc = totalCalls > 0 ? totalSpend / totalCalls : null;
         setCostPerCall(overallCpc);
 
-        // Trend: compare last 7 days avg vs prior 7 days avg
         const last7 = data.slice(-7);
         const prior7 = data.slice(-14, -7);
 
@@ -75,32 +91,64 @@ export default function KpiBar() {
           if (last7Cpc !== null && prior7Cpc !== null && prior7Cpc > 0) {
             const diff = last7Cpc - prior7Cpc;
             const pct = ((diff / prior7Cpc) * 100).toFixed(1);
-            // Lower cost per call is better → down is good (green), up is bad (red)
             if (diff < 0) {
-              setTrend({ text: `${pct}% vs prior wk`, direction: "up" });
+              setCpcTrend({ text: `${pct}% vs prior wk`, direction: "up" });
             } else if (diff > 0) {
-              setTrend({ text: `+${pct}% vs prior wk`, direction: "down" });
+              setCpcTrend({ text: `+${pct}% vs prior wk`, direction: "down" });
             } else {
-              setTrend({ text: "No change", direction: "neutral" });
+              setCpcTrend({ text: "No change", direction: "neutral" });
             }
-          } else {
-            setTrend({ text: "No change", direction: "neutral" });
           }
-        } else {
-          setTrend({ text: "No change", direction: "neutral" });
         }
 
-        // Sparkline: daily cost per call values (skip days with 0 calls)
         const sparkValues = dailyCpc.map((d) => d.cpc ?? 0);
         if (sparkValues.some((v) => v > 0)) {
-          setSparklinePath(generateSparklinePath(sparkValues));
+          setCpcSparkline(generateSparklinePath(sparkValues));
         }
       } catch {
-        // Silently fail — card shows defaults
+        // Silently fail
+      }
+    }
+
+    // Fetch revenue from Close CRM pipeline API
+    async function fetchRevenue() {
+      try {
+        const res = await fetch("/api/close/pipeline");
+        if (res.ok) {
+          const data = await res.json();
+          setRevenue(data.revenue?.cash_collected ?? null);
+          setWonDeals(data.revenue?.won_deals_count ?? null);
+        }
+      } catch {
+        // Silently fail
+      }
+    }
+
+    // Fetch clients & MRR from Supabase
+    async function fetchClients() {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from("clients")
+          .select("status, value_type, value_amount")
+          .eq("status", "active");
+
+        if (data) {
+          const clients = data as Pick<Client, "status" | "value_type" | "value_amount">[];
+          setActiveClients(clients.length);
+          const mrrTotal = clients
+            .filter((c) => c.value_type === "mrr")
+            .reduce((sum, c) => sum + Number(c.value_amount), 0);
+          setMrr(mrrTotal);
+        }
+      } catch {
+        // Silently fail
       }
     }
 
     fetchCostPerCall();
+    fetchRevenue();
+    fetchClients();
   }, []);
 
   function formatCpc(value: number | null): string {
@@ -111,17 +159,62 @@ export default function KpiBar() {
   return (
     <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
       {KPI_DATA.map((kpi, i) => {
-        // Override the 4th card (index 3) with live cost per booked call
+        // Card 0: Revenue — live from Close CRM
+        if (i === 0) {
+          return (
+            <KpiCard
+              key={i}
+              label="Revenue"
+              value={revenue !== null ? formatGbp(revenue) : "—"}
+              trend={wonDeals !== null ? `${wonDeals} deal${wonDeals !== 1 ? "s" : ""} closed` : "Loading..."}
+              direction="up"
+              color="#4ADE80"
+              sparklinePath={kpi.sparklinePath}
+            />
+          );
+        }
+
+        // Card 1: MRR — live from Supabase clients
+        if (i === 1) {
+          return (
+            <KpiCard
+              key={i}
+              label="MRR"
+              value={mrr !== null ? formatGbp(mrr) : "—"}
+              trend="Monthly recurring revenue"
+              direction="neutral"
+              color="#4ADE80"
+              sparklinePath={kpi.sparklinePath}
+            />
+          );
+        }
+
+        // Card 2: Active Clients — live from Supabase
+        if (i === 2) {
+          return (
+            <KpiCard
+              key={i}
+              label="Active Clients"
+              value={activeClients !== null ? String(activeClients) : "—"}
+              trend="Currently active"
+              direction="neutral"
+              color="#FBBF24"
+              sparklinePath={kpi.sparklinePath}
+            />
+          );
+        }
+
+        // Card 3: Cost / Booked Call — live from Supabase
         if (i === 3) {
           return (
             <KpiCard
               key={i}
               label="Cost / Booked Call"
               value={formatCpc(costPerCall)}
-              trend={trend.text || "Loading..."}
-              direction={trend.direction}
+              trend={cpcTrend.text || "Loading..."}
+              direction={cpcTrend.direction}
               color="#A855F7"
-              sparklinePath={sparklinePath}
+              sparklinePath={cpcSparkline}
             />
           );
         }
