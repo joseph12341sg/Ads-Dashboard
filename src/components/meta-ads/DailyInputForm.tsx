@@ -36,6 +36,7 @@ export default function DailyInputForm({
   const [syncDate, setSyncDate] = useState(getYesterday());
   const [syncError, setSyncError] = useState("");
   const [wasSynced, setWasSynced] = useState(false);
+  const [callsFromClose, setCallsFromClose] = useState(false);
 
   const [date, setDate] = useState(getYesterday());
   const [amountSpent, setAmountSpent] = useState("");
@@ -53,6 +54,7 @@ export default function DailyInputForm({
       setCalls(String(editingRecord.calls));
       setCpl(String(editingRecord.cpl));
       setWasSynced(editingRecord.synced_from_meta);
+      setCallsFromClose(false);
     }
   }, [editingRecord]);
 
@@ -65,6 +67,7 @@ export default function DailyInputForm({
     setCpl("");
     setSyncError("");
     setWasSynced(false);
+    setCallsFromClose(false);
     onCancelEdit();
   }
 
@@ -110,16 +113,23 @@ export default function DailyInputForm({
             />
             <MetaSyncButton
               syncDate={syncDate}
-              onSyncSuccess={(data) => {
-                if (data) {
+              onSyncSuccess={({ meta, closeCalls }) => {
+                if (meta) {
                   setDate(syncDate);
-                  setAmountSpent(String(data.amount_spent));
-                  setLinkClicks(String(data.link_clicks));
-                  setLeads(String(data.leads));
-                  setCpl(String(data.cpl));
-                  setCalls("");
+                  setAmountSpent(String(meta.amount_spent));
+                  setLinkClicks(String(meta.link_clicks));
+                  setLeads(String(meta.leads));
+                  setCpl(String(meta.cpl));
                   setWasSynced(true);
                   setSyncError("");
+
+                  if (closeCalls !== null) {
+                    setCalls(String(closeCalls));
+                    setCallsFromClose(true);
+                  } else {
+                    setCalls("");
+                    setCallsFromClose(false);
+                  }
                 }
               }}
               onSyncError={(err) => setSyncError(err)}
@@ -204,15 +214,25 @@ export default function DailyInputForm({
             </div>
           </div>
 
-          {/* Calls — Manual input */}
+          {/* Calls */}
           <div>
             <label className="flex items-center gap-2 text-[11px] text-[#A1A8B3] mb-1">
               Calls
-              <span className="text-[9px] text-[#FBBF24] uppercase tracking-wider">
-                Manual input
-              </span>
+              {callsFromClose ? (
+                <span className="text-[9px] text-[#60A5FA] uppercase tracking-wider">
+                  From Close
+                </span>
+              ) : (
+                <span className="text-[9px] text-[#FBBF24] uppercase tracking-wider">
+                  Manual input
+                </span>
+              )}
             </label>
-            <div className="border-l-2 border-[#FBBF24] pl-1">
+            <div
+              className={`border-l-2 pl-1 ${
+                callsFromClose ? "border-[#60A5FA]" : "border-[#FBBF24]"
+              }`}
+            >
               <input
                 type="number"
                 min="0"
