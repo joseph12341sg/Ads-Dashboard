@@ -71,7 +71,7 @@ async function fetchAllPages(
   return allResults;
 }
 
-/* ── Fetch total_count for a query (uses _limit=0 for efficiency) ── */
+/* ── Fetch total_count for a query (uses _limit=0) ── */
 async function fetchCount(
   baseUrl: string,
   headers: Record<string, string>
@@ -85,6 +85,7 @@ async function fetchCount(
 
 /* ── Pipeline configuration (cached permanently after first fetch) ── */
 interface PipelineConfig {
+  inbound_pipeline_id: string;
   inbound_status_map: Record<string, string>; // status_id -> label
   sales_pipeline_id: string;
   sales_status_map: Record<string, string>; // status_id -> label
@@ -92,90 +93,65 @@ interface PipelineConfig {
 
 let pipelineConfig: PipelineConfig | null = null;
 
-/* Known Inbound Pipeline labels */
-const INBOUND_LABELS = [
-  "new lead",
-  "in follow up sequence",
-  "engaged (in conversation)",
-  "follow up needed",
-  "dq/not interested",
-];
-
 async function getPipelineConfig(
   headers: Record<string, string>
 ): Promise<PipelineConfig> {
   if (pipelineConfig) return pipelineConfig;
 
-  // Fetch all lead statuses
-  const leadRes = await fetch("https://api.close.com/api/v1/status/lead/", {
-    headers,
-  });
-  const leadData = await leadRes.json();
-
-  const inboundStatusMap: Record<string, string> = {};
-
-  if (leadData.data && Array.isArray(leadData.data)) {
-    for (const status of leadData.data) {
-      const pipelineName = (status.pipeline_name ?? "") as string;
-      const label = (status.label ?? "") as string;
-
-      // Match by pipeline name
-      const matchesPipeline =
-        containsMatch(pipelineName, "Inbound Pipeline") ||
-        containsMatch(pipelineName, "00 |");
-
-      // Fallback: match by known label
-      const matchesLabel = INBOUND_LABELS.includes(label.trim().toLowerCase());
-
-      if (matchesPipeline || matchesLabel) {
-        inboundStatusMap[status.id as string] = label;
-      }
-    }
-  }
-
-  if (process.env.NODE_ENV === "development") {
-    console.log(
-      `[Close] Found ${Object.keys(inboundStatusMap).length} Inbound Pipeline statuses:`,
-      inboundStatusMap
-    );
-  }
-
-  // Fetch opportunity pipelines to find "02 | Sales Pipeline"
+  // Both Inbound and Sales are OPPORTUNITY pipelines
   const pipelinesRes = await fetch("https://api.close.com/api/v1/pipeline/", {
     headers,
   });
   const pipelinesData = await pipelinesRes.json();
 
+  let inboundPipelineId = "";
+  const inboundStatusMap: Record<string, string> = {};
   let salesPipelineId = "";
   const salesStatusMap: Record<string, string> = {};
 
   if (pipelinesData.data && Array.isArray(pipelinesData.data)) {
     for (const pipeline of pipelinesData.data) {
       const name = (pipeline.name ?? "") as string;
+
+      // "00 | Inbound Pipeline" — the SETTING pipeline
+      if (
+        containsMatch(name, "Inbound Pipeline") ||
+        containsMatch(name, "00 |")
+      ) {
+        inboundPipelineId = pipeline.id as string;
+        if (pipeline.statuses && Array.isArray(pipeline.statuses)) {
+          for (const s of pipeline.statuses) {
+            inboundStatusMap[s.id as string] = s.label as string;
+          }
+        }
+      }
+
+      // "02 | Sales Pipeline" — the CLOSER pipeline
       if (
         containsMatch(name, "Sales Pipeline") ||
         containsMatch(name, "02 |")
       ) {
         salesPipelineId = pipeline.id as string;
-
         if (pipeline.statuses && Array.isArray(pipeline.statuses)) {
           for (const s of pipeline.statuses) {
             salesStatusMap[s.id as string] = s.label as string;
           }
         }
-        break;
       }
     }
   }
 
-  if (process.env.NODE_ENV === "development") {
-    console.log(
-      `[Close] Sales Pipeline ID: ${salesPipelineId}, statuses:`,
-      salesStatusMap
-    );
-  }
+  console.log(
+    `[Close] Inbound Pipeline ID: ${inboundPipelineId}, statuses:`,
+    inboundStatusMap
+  );
+  console.log(
+    `[Close] Sales Pipeline ID: ${salesPipelineId}, statuses:`,
+    salesStatusMap
+  );
 
   pipelineConfig = {
+    inbound_pipeline_id: inboundPipelineId,
     inbound_status_map: inboundStatusMap,
     sales_pipeline_id: salesPipelineId,
     sales_status_map: salesStatusMap,
@@ -188,11 +164,6 @@ async function getPipelineConfig(
 function dateFilter(start: string | null, end: string | null): string {
   if (!start || !end) return "";
   return `date_created__gt=${start}T00:00:00&date_created__lt=${end}T23:59:59`;
-}
-
-function wonDateFilter(start: string | null, end: string | null): string {
-  if (!start || !end) return "";
-  return `date_won__gt=${start}&date_won__lt=${end}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -214,7 +185,6 @@ export async function GET(request: NextRequest) {
   try {
     const config = await getPipelineConfig(headers);
     const df = dateFilter(start, end);
-    const wdf = wonDateFilter(start, end);
 
     // ═══════════════════════════════════════════
     // 1. DIALS — ALL outbound calls
@@ -228,7 +198,8 @@ export async function GET(request: NextRequest) {
     ).length;
 
     // ═══════════════════════════════════════════
-    // 2. SETTING FUNNEL — current lead counts per Inbound Pipeline status
+    // 2. SETTING FUNNEL — current OPPORTUNITY counts per Inbound Pipeline status
+    //    (Inbound Pipeline is an OPPORTUNITY pipeline, not lead statuses)
     // ═══════════════════════════════════════════
     const settingFunnel = {
       new_lead: 0,
@@ -239,16 +210,15 @@ export async function GET(request: NextRequest) {
     };
 
     for (const [statusId, label] of Object.entries(config.inbound_status_map)) {
+      // Query OPPORTUNITIES by status_id (NOT leads)
       const count = await fetchCount(
-        `https://api.close.com/api/v1/lead/?status_id=${statusId}`,
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}`,
         headers
       );
 
-      if (process.env.NODE_ENV === "development") {
-        console.log(
-          `[Close] Lead status "${label}" (${statusId}): ${count} leads`
-        );
-      }
+      console.log(
+        `[Close] Inbound status "${label}" (${statusId}): ${count} opportunities`
+      );
 
       const lbl = label.trim().toLowerCase();
       if (lbl === "new lead") settingFunnel.new_lead = count;
@@ -262,6 +232,7 @@ export async function GET(request: NextRequest) {
         settingFunnel.dq_not_interested = count;
     }
 
+    // total_leads = all opportunities that are currently in any Inbound Pipeline status
     const total_leads =
       settingFunnel.new_lead +
       settingFunnel.in_follow_up +
@@ -269,8 +240,13 @@ export async function GET(request: NextRequest) {
       settingFunnel.follow_up_needed +
       settingFunnel.dq_not_interested;
 
-    // DQ count = current leads in DQ/Not Interested status
+    // DQ count = opportunities currently in DQ/Not Interested status
     const dq_count = settingFunnel.dq_not_interested;
+
+    console.log(
+      `[Close] Setting funnel: total_leads=${total_leads}, dq=${dq_count}`,
+      settingFunnel
+    );
 
     // ═══════════════════════════════════════════
     // 3. OPPORTUNITY STATUS CHANGES — Sales Pipeline only
@@ -280,7 +256,7 @@ export async function GET(request: NextRequest) {
       : `https://api.close.com/api/v1/activity/status_change/opportunity/`;
     const allOppChanges = await fetchAllPages(oppChangesUrl, headers);
 
-    // Filter to Sales Pipeline only
+    // Filter to Sales Pipeline only using status IDs
     const salesStatusIds = new Set(Object.keys(config.sales_status_map));
     const oppChanges =
       salesStatusIds.size > 0
@@ -291,11 +267,9 @@ export async function GET(request: NextRequest) {
           })
         : allOppChanges;
 
-    if (process.env.NODE_ENV === "development") {
-      console.log(
-        `[Close] Opportunity status changes: ${allOppChanges.length} total, ${oppChanges.length} in Sales Pipeline`
-      );
-    }
+    console.log(
+      `[Close] Opportunity status changes: ${allOppChanges.length} total, ${oppChanges.length} in Sales Pipeline`
+    );
 
     const closer = {
       call_1_scheduled: 0,
@@ -304,12 +278,12 @@ export async function GET(request: NextRequest) {
       call_2_scheduled: 0,
       call_2_sat: 0,
       call_2_no_show: 0,
-      closed_won: 0, // "Closed" (active) + "Onboarding Call Scheduled" (won)
-      closed_lost: 0, // "Lost/DQ" (lost)
-      no_close: 0, // "No Close" (active)
+      closed_won: 0,
+      closed_lost: 0,
+      no_close: 0,
       follow_up_scheduled: 0,
       nurture: 0,
-      onboarding: 0, // "Onboarding Call Scheduled" (won)
+      onboarding: 0,
     };
 
     for (const change of oppChanges) {
@@ -319,30 +293,24 @@ export async function GET(request: NextRequest) {
         .trim()
         .toLowerCase();
 
-      // Call 1 Scheduled
       if (labelMatch(newLabel, "Call 1 - Discovery Scheduled"))
         closer.call_1_scheduled++;
 
-      // Call 1 No Show
       if (labelMatch(newLabel, "Call 1 - No Show")) closer.call_1_no_show++;
 
-      // Call 1 Sat = moved FROM "Call 1 - Discovery Scheduled" to ANY next stage
-      // except "Call 1 - No Show"
+      // Call 1 Sat = moved FROM Call 1 to ANY next stage except No Show
       if (
         labelMatch(oldLabel, "Call 1 - Discovery Scheduled") &&
         !labelMatch(newLabel, "Call 1 - No Show")
       )
         closer.call_1_sat++;
 
-      // Call 2 Scheduled
       if (labelMatch(newLabel, "Call 2 - Close Scheduled"))
         closer.call_2_scheduled++;
 
-      // Call 2 No Show
       if (labelMatch(newLabel, "Call 2 - No Show")) closer.call_2_no_show++;
 
-      // Call 2 Sat = moved FROM "Call 2 - Close Scheduled" to ANY next stage
-      // except "Call 2 - No Show"
+      // Call 2 Sat = moved FROM Call 2 to ANY next stage except No Show
       if (
         labelMatch(oldLabel, "Call 2 - Close Scheduled") &&
         !labelMatch(newLabel, "Call 2 - No Show")
@@ -354,7 +322,10 @@ export async function GET(request: NextRequest) {
         closer.closed_won++;
 
       // "Onboarding Call Scheduled" (WON status)
-      if (labelMatch(newLabel, "Onboarding Call Scheduled") || newType === "won") {
+      if (
+        labelMatch(newLabel, "Onboarding Call Scheduled") ||
+        newType === "won"
+      ) {
         closer.closed_won++;
         closer.onboarding++;
       }
@@ -363,82 +334,120 @@ export async function GET(request: NextRequest) {
       if (labelMatch(newLabel, "Lost/DQ") || newType === "lost")
         closer.closed_lost++;
 
-      // "No Close" (ACTIVE status — didn't close but not fully lost)
+      // "No Close" (ACTIVE — didn't close but not fully lost)
       if (labelMatch(newLabel, "No Close")) closer.no_close++;
 
-      // Follow Up - Scheduled
       if (labelMatch(newLabel, "Follow Up - Scheduled"))
         closer.follow_up_scheduled++;
 
-      // Nurture
       if (labelMatch(newLabel, "Nurture")) closer.nurture++;
     }
 
     const appointments_booked = closer.call_1_scheduled;
 
     // ═══════════════════════════════════════════
-    // 4. CASH COLLECTED — "Closed" (active) + "Onboarding Call Scheduled" (won)
+    // 4. CASH COLLECTED — "Closed" + "Onboarding Call Scheduled" in Sales Pipeline
+    //    Use status_id filtering since pipeline_id doesn't work reliably
     // ═══════════════════════════════════════════
-    const pipelineFilter = config.sales_pipeline_id
-      ? `pipeline_id=${config.sales_pipeline_id}&`
-      : "";
+    // Find the "Closed" and "Onboarding Call Scheduled" status IDs
+    let closedStatusId = "";
+    let onboardingStatusId = "";
+    for (const [id, label] of Object.entries(config.sales_status_map)) {
+      if (labelMatch(label, "Closed")) closedStatusId = id;
+      if (labelMatch(label, "Onboarding Call Scheduled"))
+        onboardingStatusId = id;
+    }
 
-    // Fetch "Closed" opportunities (active status = deal done)
-    const closedUrl = wdf
-      ? `https://api.close.com/api/v1/opportunity/?${pipelineFilter}status_label=Closed&${wdf}&_fields=id,value,lead_name,date_won,status_label,status_type`
-      : `https://api.close.com/api/v1/opportunity/?${pipelineFilter}status_label=Closed&_fields=id,value,lead_name,date_won,status_label,status_type`;
-    const closedOpps = await fetchAllPages(closedUrl, headers);
-
-    // Fetch "won" opportunities (Onboarding Call Scheduled)
-    const wonUrl = wdf
-      ? `https://api.close.com/api/v1/opportunity/?${pipelineFilter}status_type=won&${wdf}&_fields=id,value,lead_name,date_won,status_label,status_type`
-      : `https://api.close.com/api/v1/opportunity/?${pipelineFilter}status_type=won&_fields=id,value,lead_name,date_won,status_label,status_type`;
-    const wonOpps = await fetchAllPages(wonUrl, headers);
-
-    // Deduplicate by opportunity ID
+    const wonOpps: Record<string, unknown>[] = [];
     const seenIds = new Set<string>();
-    const allWonOpps: Record<string, unknown>[] = [];
-    for (const opp of [...closedOpps, ...wonOpps]) {
-      const id = opp.id as string;
-      if (!seenIds.has(id)) {
-        seenIds.add(id);
-        allWonOpps.push(opp);
+
+    // Fetch "Closed" opportunities by status_id
+    if (closedStatusId) {
+      const closedOpps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${closedStatusId}&_fields=id,value,lead_name,date_won,status_label,status_type`,
+        headers
+      );
+      for (const opp of closedOpps) {
+        const id = opp.id as string;
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          wonOpps.push(opp);
+        }
+      }
+    }
+
+    // Fetch "Onboarding Call Scheduled" opportunities by status_id
+    if (onboardingStatusId) {
+      const onboardingOpps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${onboardingStatusId}&_fields=id,value,lead_name,date_won,status_label,status_type`,
+        headers
+      );
+      for (const opp of onboardingOpps) {
+        const id = opp.id as string;
+        if (!seenIds.has(id)) {
+          seenIds.add(id);
+          wonOpps.push(opp);
+        }
       }
     }
 
     let cash_collected = 0;
-    for (const opp of allWonOpps) {
+    for (const opp of wonOpps) {
       cash_collected += (opp.value as number) ?? 0;
     }
-    cash_collected = Math.round(cash_collected / 100); // cents to pounds
+    cash_collected = Math.round(cash_collected / 100);
 
-    if (process.env.NODE_ENV === "development") {
-      console.log(
-        `[Close] Won opportunities (Closed + Onboarding): ${allWonOpps.length}, cash: £${cash_collected}`
-      );
-    }
-
-    // ═══════════════════════════════════════════
-    // 5. PIPELINE VALUE — active opportunities in Sales Pipeline only
-    // ═══════════════════════════════════════════
-    const activeUrl = config.sales_pipeline_id
-      ? `https://api.close.com/api/v1/opportunity/?pipeline_id=${config.sales_pipeline_id}&status_type=active&_fields=value`
-      : `https://api.close.com/api/v1/opportunity/?status_type=active&_fields=value`;
-    const allActive = await fetchAllPages(activeUrl, headers);
-    const pipeline_value = Math.round(
-      allActive.reduce((sum, o) => sum + ((o.value as number) ?? 0), 0) / 100
+    console.log(
+      `[Close] Won opps (Closed + Onboarding): ${wonOpps.length}, cash: £${cash_collected}`
     );
 
     // ═══════════════════════════════════════════
-    // 6. RECENT DEALS — Sales Pipeline only
+    // 5. PIPELINE VALUE — active opportunities in Sales Pipeline only
+    //    Sum value of all opportunities in active Sales Pipeline statuses
     // ═══════════════════════════════════════════
-    const recentUrl = config.sales_pipeline_id
-      ? `https://api.close.com/api/v1/opportunity/?pipeline_id=${config.sales_pipeline_id}&_order_by=-date_updated&_fields=value,lead_name,status_label,status_type,date_won,date_updated&_limit=10`
-      : `https://api.close.com/api/v1/opportunity/?_order_by=-date_updated&_fields=value,lead_name,status_label,status_type,date_won,date_updated&_limit=10`;
-    const recentRes = await fetch(recentUrl, { headers });
-    const recentJson = await recentRes.json();
-    const recent_deals = (recentJson.data ?? []).map(
-      (d: Record<string, unknown>) => ({
+    let pipeline_value = 0;
+    for (const [statusId, label] of Object.entries(config.sales_status_map)) {
+      // Skip non-active statuses (won, lost) and "Closed" (which we count as won)
+      const lbl = label.trim().toLowerCase();
+      if (
+        lbl === "closed" ||
+        lbl === "onboarding call scheduled" ||
+        lbl === "lost/dq"
+      )
+        continue;
+
+      const statusOpps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}&_fields=value`,
+        headers
+      );
+      for (const opp of statusOpps) {
+        pipeline_value += (opp.value as number) ?? 0;
+      }
+    }
+    pipeline_value = Math.round(pipeline_value / 100);
+
+    // ═══════════════════════════════════════════
+    // 6. RECENT DEALS — all Sales Pipeline opportunities, sorted by recent
+    // ═══════════════════════════════════════════
+    // Fetch from each Sales Pipeline status, combine and sort
+    const allSalesOpps: Record<string, unknown>[] = [];
+    for (const statusId of Object.keys(config.sales_status_map)) {
+      const opps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}&_fields=value,lead_name,status_label,status_type,date_won,date_updated`,
+        headers
+      );
+      allSalesOpps.push(...opps);
+    }
+
+    // Sort by date_updated descending and take top 10
+    allSalesOpps.sort((a, b) => {
+      const da = (a.date_updated as string) ?? "";
+      const db = (b.date_updated as string) ?? "";
+      return db.localeCompare(da);
+    });
+
+    const recent_deals = allSalesOpps.slice(0, 10).map(
+      (d) => ({
         lead_name: d.lead_name ?? "Unknown",
         value: Math.round(((d.value as number) ?? 0) / 100),
         status_label: d.status_label ?? "",
@@ -459,14 +468,17 @@ export async function GET(request: NextRequest) {
       revenue: {
         cash_collected,
         pipeline_value,
-        won_deals_count: allWonOpps.length,
+        won_deals_count: wonOpps.length,
       },
       recent_deals,
     };
 
+    console.log("[Close] Final result:", JSON.stringify(result, null, 2));
+
     setCache(cacheKey, result);
     return NextResponse.json(result);
   } catch (err) {
+    console.error("[Close] Pipeline error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }
