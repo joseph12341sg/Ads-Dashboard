@@ -10,7 +10,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const campaignId = process.env.META_CAMPAIGN_ID;
+  const campaignId =
+    request.nextUrl.searchParams.get("campaignId") ||
+    process.env.META_CAMPAIGN_ID;
   const accessToken = process.env.META_ACCESS_TOKEN;
 
   if (!campaignId || !accessToken) {
