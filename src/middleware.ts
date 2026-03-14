@@ -35,6 +35,12 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isLoginPage = request.nextUrl.pathname === "/login";
+  const isIntakePage = request.nextUrl.pathname.startsWith("/intake");
+
+  // Public intake form — skip auth
+  if (isIntakePage) {
+    return supabaseResponse;
+  }
 
   if (!user && !isLoginPage) {
     const url = request.nextUrl.clone();
