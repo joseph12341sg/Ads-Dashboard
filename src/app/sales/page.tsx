@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import SalesHeader from "@/components/sales/SalesHeader";
 import ConnectionBanner from "@/components/sales/ConnectionBanner";
 import SectionHeader from "@/components/sales/SectionHeader";
@@ -25,17 +25,29 @@ function getDefaultRange(): [string, string] {
 }
 
 export default function SalesPage() {
-  const [start, end] = getDefaultRange();
-  const [dateStart, setDateStart] = useState(start);
-  const [dateEnd, setDateEnd] = useState(end);
+  const [defStart, defEnd] = getDefaultRange();
+  const [dateStart, setDateStart] = useState(defStart);
+  const [dateEnd, setDateEnd] = useState(defEnd);
   const [data, setData] = useState<SalesDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [slowLoad, setSlowLoad] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const slowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchData = useCallback(async (s: string, e: string) => {
     setLoading(true);
+    setSlowLoad(false);
+
+    // Show slow-load message after 3 seconds
+    slowTimer.current = setTimeout(() => setSlowLoad(true), 3000);
+
     try {
-      const res = await fetch(`/api/close/pipeline?start=${s}&end=${e}`);
+      const isAllTime = s === "all" && e === "all";
+      const url = isAllTime
+        ? "/api/close/pipeline"
+        : `/api/close/pipeline?start=${s}&end=${e}`;
+
+      const res = await fetch(url);
       if (!res.ok) {
         const err = await res.json();
         setConnectionError(err.error || "Unable to connect to Close CRM");
@@ -50,11 +62,12 @@ export default function SalesPage() {
       setData(null);
     } finally {
       setLoading(false);
+      setSlowLoad(false);
+      if (slowTimer.current) clearTimeout(slowTimer.current);
     }
   }, []);
 
   useEffect(() => {
-    // Check health on mount
     fetch("/api/close/health")
       .then((r) => r.json())
       .then((h) => {
@@ -63,6 +76,10 @@ export default function SalesPage() {
       .catch(() => {});
 
     fetchData(dateStart, dateEnd);
+
+    return () => {
+      if (slowTimer.current) clearTimeout(slowTimer.current);
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleDateChange(s: string, e: string) {
@@ -86,10 +103,21 @@ export default function SalesPage() {
   const settingRates = calculateSettingRates(setting);
   const closerRates = calculateCloserRates(closer, revenue);
 
+  const periodLabel = dateStart === "all" ? "All time" : "Current period";
+
   return (
     <div className="min-h-screen bg-[#0E1116]">
       {connectionError && <ConnectionBanner error={connectionError} />}
       <SalesHeader start={dateStart} end={dateEnd} onDateChange={handleDateChange} />
+
+      {/* Slow load message */}
+      {loading && slowLoad && (
+        <div className="text-center py-2">
+          <span className="text-xs text-[#A1A8B3] animate-pulse">
+            Loading historical data from Close...
+          </span>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-6 py-6 flex flex-col gap-6">
         {/* ═══ SETTING PIPELINE ═══ */}
@@ -110,7 +138,7 @@ export default function SalesPage() {
 
         <PipelineFunnel
           title="Setting funnel"
-          subtitle="Current period"
+          subtitle={periodLabel}
           stages={[
             { label: "New Lead", value: setting.funnel.new_lead, color: "#60A5FA" },
             { label: "In Follow Up Sequence", value: setting.funnel.in_follow_up, color: "#60A5FA" },
@@ -166,7 +194,7 @@ export default function SalesPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <PipelineFunnel
             title="Closer funnel"
-            subtitle="Current period"
+            subtitle={periodLabel}
             stages={[
               { label: "Call 1 - Discovery Scheduled", value: closer.call_1_scheduled, color: "#60A5FA" },
               { label: "Call 1 - No Show", value: closer.call_1_no_show, color: "#F87171" },
