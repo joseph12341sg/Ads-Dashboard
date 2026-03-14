@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-bg: #0E1116;
+  --brand-card: #161B22;
+  --brand-accent: #5B7C99;
+  --brand-headline: #F2F4F8;
+  --brand-muted: #A1A8B3;
+}
+
+body {
+  background-color: var(--brand-bg);
+  color: var(--brand-headline);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--brand-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--brand-accent);
+  border-radius: 3px;
+}
