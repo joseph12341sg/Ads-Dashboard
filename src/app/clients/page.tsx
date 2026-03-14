@@ -37,22 +37,20 @@ export default function ClientsPage() {
   const renewingSoon = getClientsRenewingSoon(clients);
 
   async function handleGenerateLink(): Promise<string> {
-    const token = crypto.randomUUID();
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) throw new Error("Not authenticated");
 
-    const { error } = await supabase.from("intake_links").insert({
-      user_id: user.id,
-      token,
-      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      used: false,
+    const res = await fetch("/api/intake", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: user.id }),
     });
-    if (error) throw error;
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Failed to generate link");
 
-    const baseUrl = window.location.origin;
-    return `${baseUrl}/intake/${token}`;
+    return `${window.location.origin}/intake/${json.token}`;
   }
 
   return (

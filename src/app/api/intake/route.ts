@@ -156,6 +156,51 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PUT(request: NextRequest) {
+  const supabase = getServiceClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: "Service role key not configured" },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const body = await request.json();
+    const { user_id } = body;
+
+    if (!user_id) {
+      return NextResponse.json(
+        { error: "user_id is required" },
+        { status: 400 }
+      );
+    }
+
+    const token = crypto.randomUUID();
+    const expires_at = new Date(
+      Date.now() + 7 * 24 * 60 * 60 * 1000
+    ).toISOString();
+
+    const { error } = await supabase.from("intake_links").insert({
+      user_id,
+      token,
+      expires_at,
+      used: false,
+    });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ token });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get("token");
   if (!token) {

@@ -9,8 +9,20 @@ export function calculateClientKpis(clients: Client[]): ClientKpis {
     .filter((c) => c.value_type === "mrr")
     .reduce((sum, c) => sum + Number(c.value_amount), 0);
 
+  const now = new Date();
   const total_value = active.reduce((sum, c) => {
-    if (c.value_type === "mrr") return sum + Number(c.value_amount) * 12;
+    if (c.value_type === "mrr") {
+      if (c.renewal_date) {
+        const renewal = new Date(c.renewal_date);
+        const diffMs = renewal.getTime() - now.getTime();
+        const remainingMonths = Math.max(
+          0,
+          Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30))
+        );
+        return sum + Number(c.value_amount) * remainingMonths;
+      }
+      return sum;
+    }
     return sum + Number(c.value_amount);
   }, 0);
 

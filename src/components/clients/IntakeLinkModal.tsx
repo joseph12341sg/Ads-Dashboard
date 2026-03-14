@@ -25,8 +25,8 @@ export default function IntakeLinkModal({
     try {
       const url = await onGenerate();
       setLink(url);
-    } catch {
-      setError("Failed to generate link. Please try again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate link. Please try again.");
     } finally {
       setGenerating(false);
     }
