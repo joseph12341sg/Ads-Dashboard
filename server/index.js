@@ -1,6 +1,7 @@
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const path = require('path')
 const db = require('./db')
 
 const app = express()
@@ -67,6 +68,13 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, data: { status: 'ok' } })
 })
 
+// Serve React frontend in production
+const clientBuild = path.join(__dirname, '../client/dist')
+app.use(express.static(clientBuild))
+app.get('*', (req, res) => {
+  res.sendFile(path.join(clientBuild, 'index.html'))
+})
+
 app.listen(PORT, () => {
-  console.log(`Ads Dashboard API running on port ${PORT}`)
+  console.log(`Ads Dashboard running on port ${PORT}`)
 })
