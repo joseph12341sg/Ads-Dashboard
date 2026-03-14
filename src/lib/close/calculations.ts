@@ -9,18 +9,19 @@ import type {
 export function calculateSettingRates(
   data: SettingPipelineData
 ): SettingRates {
+  const totalAll = data.total_leads_all;
   return {
     booking_rate:
-      data.total_leads > 0
-        ? (data.appointments_booked / data.total_leads) * 100
+      totalAll > 0
+        ? (data.appointments_booked / totalAll) * 100
         : null,
     setting_rate:
-      data.total_leads > 0
-        ? (data.appointments_booked / data.total_leads) * 100
+      totalAll > 0
+        ? (data.appointments_booked / totalAll) * 100
         : null,
     dq_rate:
-      data.total_leads > 0
-        ? (data.dq_count / data.total_leads) * 100
+      totalAll > 0
+        ? (data.dq_count / totalAll) * 100
         : null,
   };
 }

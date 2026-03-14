@@ -402,6 +402,23 @@ export async function GET(request: NextRequest) {
     );
 
     // ═══════════════════════════════════════════
+    // 4b. TOTAL LEADS (ALL TIME) — sum of all opportunities in BOTH pipelines
+    // ═══════════════════════════════════════════
+    let total_leads_all = total_leads; // Start with Inbound Pipeline count
+    // Add all opportunities currently in Sales Pipeline statuses
+    for (const statusId of Object.keys(config.sales_status_map)) {
+      const count = await fetchCount(
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}`,
+        headers
+      );
+      total_leads_all += count;
+    }
+
+    console.log(
+      `[Close] Total leads (all pipelines): ${total_leads_all} (Inbound: ${total_leads}, Sales: ${total_leads_all - total_leads})`
+    );
+
+    // ═══════════════════════════════════════════
     // 5. PIPELINE VALUE — active opportunities in Sales Pipeline only
     //    Sum value of all opportunities in active Sales Pipeline statuses
     // ═══════════════════════════════════════════
@@ -460,6 +477,7 @@ export async function GET(request: NextRequest) {
       setting: {
         total_dials,
         total_leads,
+        total_leads_all,
         appointments_booked,
         dq_count,
         funnel: settingFunnel,

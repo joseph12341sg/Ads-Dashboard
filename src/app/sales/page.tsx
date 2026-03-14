@@ -89,7 +89,7 @@ export default function SalesPage() {
   }
 
   const setting = data?.setting ?? {
-    total_dials: 0, total_leads: 0, appointments_booked: 0, dq_count: 0,
+    total_dials: 0, total_leads: 0, total_leads_all: 0, appointments_booked: 0, dq_count: 0,
     funnel: { new_lead: 0, in_follow_up: 0, engaged: 0, follow_up_needed: 0, dq_not_interested: 0 },
   };
   const closer = data?.closer ?? {
@@ -125,14 +125,22 @@ export default function SalesPage() {
         <SectionHeader title="Setting pipeline" />
 
         <SalesKpiRow
-          columns={6}
+          columns={4}
           loading={loading}
           items={[
+            { label: "Total Leads", value: formatNumber(setting.total_leads_all), subtitle: "All leads across both pipelines", color: "#60A5FA" },
             { label: "Total Dials", value: formatNumber(setting.total_dials), subtitle: "Outbound calls" },
             { label: "Appointments Booked", value: formatNumber(setting.appointments_booked), subtitle: "Moved to Call 1 Scheduled" },
+            { label: "DQ'd", value: formatNumber(setting.dq_count), subtitle: "Not interested / unqualified" },
+          ]}
+        />
+
+        <SalesKpiRow
+          columns={3}
+          loading={loading}
+          items={[
             { label: "Booking Rate", value: formatPercentage(settingRates.booking_rate), subtitle: "Booked ÷ Total Leads", color: "#60A5FA", badge: "auto" },
             { label: "Setting Rate", value: formatPercentage(settingRates.setting_rate), subtitle: "Booked ÷ Total Leads", color: "#A855F7", badge: "auto" },
-            { label: "DQ'd", value: formatNumber(setting.dq_count), subtitle: "Not interested / unqualified" },
             { label: "DQ Rate", value: formatPercentage(settingRates.dq_rate), subtitle: "DQ'd ÷ Total Leads", color: "#F87171", badge: "auto" },
           ]}
         />

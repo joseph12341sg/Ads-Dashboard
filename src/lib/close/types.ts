@@ -1,6 +1,7 @@
 export interface SettingPipelineData {
   total_dials: number;
   total_leads: number;
+  total_leads_all: number;
   appointments_booked: number;
   dq_count: number;
   funnel: {
