@@ -95,7 +95,8 @@ export default function SalesPage() {
   const closer = data?.closer ?? {
     call_1_scheduled: 0, call_1_sat: 0, call_1_no_show: 0,
     call_2_scheduled: 0, call_2_sat: 0, call_2_no_show: 0,
-    closed_won: 0, closed_lost: 0, follow_up_scheduled: 0, nurture: 0,
+    closed_won: 0, closed_lost: 0, no_close: 0,
+    follow_up_scheduled: 0, nurture: 0, onboarding: 0,
   };
   const revenue = data?.revenue ?? { cash_collected: 0, pipeline_value: 0, won_deals_count: 0 };
   const recentDeals = data?.recent_deals ?? [];
@@ -129,7 +130,7 @@ export default function SalesPage() {
           items={[
             { label: "Total Dials", value: formatNumber(setting.total_dials), subtitle: "Outbound calls" },
             { label: "Appointments Booked", value: formatNumber(setting.appointments_booked), subtitle: "Moved to Call 1 Scheduled" },
-            { label: "Booking Rate", value: formatPercentage(settingRates.booking_rate), subtitle: "Booked ÷ Dials", color: "#60A5FA", badge: "auto" },
+            { label: "Booking Rate", value: formatPercentage(settingRates.booking_rate), subtitle: "Booked ÷ Total Leads", color: "#60A5FA", badge: "auto" },
             { label: "Setting Rate", value: formatPercentage(settingRates.setting_rate), subtitle: "Booked ÷ Total Leads", color: "#A855F7", badge: "auto" },
             { label: "DQ'd", value: formatNumber(setting.dq_count), subtitle: "Not interested / unqualified" },
             { label: "DQ Rate", value: formatPercentage(settingRates.dq_rate), subtitle: "DQ'd ÷ Total Leads", color: "#F87171", badge: "auto" },
@@ -202,8 +203,10 @@ export default function SalesPage() {
               { label: "Call 2 - No Show", value: closer.call_2_no_show, color: "#F87171" },
               { label: "Follow Up - Scheduled", value: closer.follow_up_scheduled, color: "#FBBF24" },
               { label: "Nurture", value: closer.nurture, color: "#5B7C99" },
-              { label: "Closed (Won)", value: closer.closed_won, color: "#4ADE80" },
-              { label: "No Close (Lost)", value: closer.closed_lost, color: "#F87171" },
+              { label: "Closed", value: closer.closed_won - closer.onboarding, color: "#4ADE80" },
+              { label: "Onboarding Call Scheduled", value: closer.onboarding, color: "#4ADE80" },
+              { label: "No Close", value: closer.no_close, color: "#F87171" },
+              { label: "Lost/DQ", value: closer.closed_lost, color: "#F87171" },
             ]}
           />
           <RecentDealsTable deals={recentDeals} loading={loading} />

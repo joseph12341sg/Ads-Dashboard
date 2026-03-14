@@ -21,8 +21,10 @@ export interface CloserPipelineData {
   call_2_no_show: number;
   closed_won: number;
   closed_lost: number;
+  no_close: number;
   follow_up_scheduled: number;
   nurture: number;
+  onboarding: number;
 }
 
 export interface RevenueData {

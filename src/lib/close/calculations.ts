@@ -11,8 +11,8 @@ export function calculateSettingRates(
 ): SettingRates {
   return {
     booking_rate:
-      data.total_dials > 0
-        ? (data.appointments_booked / data.total_dials) * 100
+      data.total_leads > 0
+        ? (data.appointments_booked / data.total_leads) * 100
         : null,
     setting_rate:
       data.total_leads > 0
