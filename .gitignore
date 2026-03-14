@@ -7,3 +7,5 @@ dist/
 .DS_Store
 node_modules/
 .next/
+.env.local
+tsconfig.tsbuildinfo
