@@ -202,8 +202,8 @@ export default function SpeedToLeadSection({
           loading={loading}
         />
         <StatCard
-          label="Avg Calls Per Lead"
-          value={fmt(stl?.avg_contact_attempts ?? null, "x")}
+          label="Avg Calls Per Lead / Day"
+          value={fmt(stl?.avg_contact_attempts_per_day ?? null, "x")}
           subtitle={`${stl?.total_leads ?? 0} inbound pipeline leads`}
           color="#A855F7"
           loading={loading}

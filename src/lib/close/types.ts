@@ -76,6 +76,7 @@ export interface SpeedToLeadData {
       total: number;
     };
     avg_contact_attempts: number | null;
+    avg_contact_attempts_per_day: number | null;
     total_leads: number;
     leads_contacted: number;
   };

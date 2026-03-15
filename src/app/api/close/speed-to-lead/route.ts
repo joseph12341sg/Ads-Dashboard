@@ -67,19 +67,20 @@ function setCache(key: string, data: unknown) {
   cache.set(key, { data, ts: Date.now() });
 }
 
-/* ── Get Inbound Pipeline status IDs ── */
-let inboundStatusIds: string[] | null = null;
+/* ── Get Inbound Pipeline info ── */
+let inboundPipelineInfo: { pipelineId: string; statusIds: string[] } | null = null;
 
-async function getInboundStatusIds(
+async function getInboundPipelineInfo(
   headers: Record<string, string>
-): Promise<string[]> {
-  if (inboundStatusIds) return inboundStatusIds;
+): Promise<{ pipelineId: string; statusIds: string[] }> {
+  if (inboundPipelineInfo) return inboundPipelineInfo;
 
   const res = await fetch("https://api.close.com/api/v1/pipeline/", {
     headers,
   });
   const data = await res.json();
-  const ids: string[] = [];
+  const statusIds: string[] = [];
+  let pipelineId = "";
 
   if (data.data && Array.isArray(data.data)) {
     for (const pipeline of data.data) {
@@ -88,9 +89,10 @@ async function getInboundStatusIds(
         containsMatch(name, "Inbound Pipeline") ||
         containsMatch(name, "00 |")
       ) {
+        pipelineId = pipeline.id as string;
         if (pipeline.statuses && Array.isArray(pipeline.statuses)) {
           for (const s of pipeline.statuses) {
-            ids.push(s.id as string);
+            statusIds.push(s.id as string);
           }
         }
         break;
@@ -98,9 +100,9 @@ async function getInboundStatusIds(
     }
   }
 
-  inboundStatusIds = ids;
-  console.log(`[STL] Inbound Pipeline status IDs: ${ids.join(", ")}`);
-  return ids;
+  inboundPipelineInfo = { pipelineId, statusIds };
+  console.log(`[STL] Inbound Pipeline ID: ${pipelineId}, status IDs: ${statusIds.join(", ")}`);
+  return inboundPipelineInfo;
 }
 
 export async function GET(request: NextRequest) {
@@ -121,38 +123,36 @@ export async function GET(request: NextRequest) {
 
   try {
     // ═══════════════════════════════════════════
-    // 1. Get Inbound Pipeline status IDs to filter leads
+    // 1. Get Inbound Pipeline ID and status IDs
     // ═══════════════════════════════════════════
-    const statusIds = await getInboundStatusIds(headers);
+    const { pipelineId, statusIds } = await getInboundPipelineInfo(headers);
 
-    if (statusIds.length === 0) {
+    if (!pipelineId) {
       return NextResponse.json({
         error: "Inbound Pipeline not found",
       }, { status: 404 });
     }
 
     // ═══════════════════════════════════════════
-    // 2. Fetch all opportunities in the Inbound Pipeline
-    //    to get the lead_ids (these are the setting pipeline leads)
+    // 2. Fetch ALL opportunities ever created in the Inbound Pipeline
+    //    (using pipeline_id to include leads that may have moved out)
     // ═══════════════════════════════════════════
     const inboundLeadIds = new Set<string>();
     const leadCreatedDates = new Map<string, string>(); // lead_id -> earliest date_created
 
-    for (const statusId of statusIds) {
-      const opps = await fetchAllPages(
-        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}&_fields=lead_id,date_created`,
-        headers
-      );
-      for (const opp of opps) {
-        const leadId = opp.lead_id as string;
-        const dateCreated = opp.date_created as string;
-        if (!leadId) continue;
-        inboundLeadIds.add(leadId);
-        // Track earliest opportunity creation date per lead
-        const existing = leadCreatedDates.get(leadId);
-        if (!existing || dateCreated < existing) {
-          leadCreatedDates.set(leadId, dateCreated);
-        }
+    const opps = await fetchAllPages(
+      `https://api.close.com/api/v1/opportunity/?pipeline_id=${pipelineId}&_fields=lead_id,date_created`,
+      headers
+    );
+    for (const opp of opps) {
+      const leadId = opp.lead_id as string;
+      const dateCreated = opp.date_created as string;
+      if (!leadId) continue;
+      inboundLeadIds.add(leadId);
+      // Track earliest opportunity creation date per lead
+      const existing = leadCreatedDates.get(leadId);
+      if (!existing || dateCreated < existing) {
+        leadCreatedDates.set(leadId, dateCreated);
       }
     }
 
@@ -285,6 +285,9 @@ export async function GET(request: NextRequest) {
         ? totalContactAttempts / inboundLeadIds.size
         : null;
 
+    // Avg contact attempts per day = avg contact attempts ÷ working days
+    // (calculated after workingDays is computed below)
+
     // ═══════════════════════════════════════════
     // 8. Dials per day metrics
     // ═══════════════════════════════════════════
@@ -301,6 +304,11 @@ export async function GET(request: NextRequest) {
       }
       workingDays = Math.max(days, 1);
     }
+
+    const avgContactAttemptsPerDay =
+      avgContactAttempts !== null && workingDays > 0
+        ? avgContactAttempts / workingDays
+        : null;
 
     const totalCalls = calls.length;
     const personalDialsPerDay =
@@ -324,6 +332,7 @@ export async function GET(request: NextRequest) {
           total: afterHoursTotal,
         },
         avg_contact_attempts: avgContactAttempts,
+        avg_contact_attempts_per_day: avgContactAttemptsPerDay,
         total_leads: inboundLeadIds.size,
         leads_contacted: uniqueLeadsContacted,
       },
