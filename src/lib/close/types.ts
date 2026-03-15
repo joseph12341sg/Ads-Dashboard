@@ -63,3 +63,30 @@ export interface SalesDashboardData {
   revenue: RevenueData;
   recent_deals: RecentDeal[];
 }
+
+export interface SpeedToLeadData {
+  speed_to_lead: {
+    in_hours: {
+      total: number;
+      within_5_min: number;
+      percentage: number | null;
+      avg_response_minutes: number | null;
+    };
+    after_hours: {
+      total: number;
+      within_5_min: number;
+      percentage: number | null;
+      avg_response_minutes: number | null;
+    };
+    avg_contact_attempts: number | null;
+    total_leads: number;
+    leads_contacted: number;
+  };
+  dials: {
+    total_calls: number;
+    working_days: number;
+    personal_dials_per_day: number | null;
+    office_dials_per_day: number | null;
+    unique_leads_contacted: number;
+  };
+}
