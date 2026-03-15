@@ -191,41 +191,34 @@ export default function SpeedToLeadSection({
           value={stl?.in_hours.percentage ?? null}
           target={KPI_TARGETS.speedToLead}
           unit="%"
-          subtitle={`${stl?.in_hours.within_5_min ?? 0}/${stl?.in_hours.total ?? 0} within 5 min`}
+          subtitle={`${stl?.in_hours.within_5_min ?? 0}/${stl?.in_hours.total ?? 0} in-hours leads within 5 min`}
           loading={loading}
         />
         <StatCard
-          label="Avg Response (In Hours)"
+          label="Avg Response Time"
           value={fmtTime(stl?.in_hours.avg_response_minutes ?? null)}
-          subtitle="Avg time to first contact"
+          subtitle="Avg time to first contact (in-hours only)"
           color="#60A5FA"
           loading={loading}
         />
         <StatCard
-          label="After Hours Leads"
-          value={`${stl?.after_hours.within_5_min ?? 0}/${stl?.after_hours.total ?? 0}`}
-          subtitle={`${fmt(stl?.after_hours.percentage ?? null, "%")} within 5 min`}
-          color="#FBBF24"
+          label="Avg Calls Per Lead"
+          value={fmt(stl?.avg_contact_attempts ?? null, "x")}
+          subtitle={`${stl?.in_hours.total ?? 0} in-hours leads`}
+          color="#A855F7"
           loading={loading}
         />
         <StatCard
-          label="Avg Response (After Hours)"
-          value={fmtTime(stl?.after_hours.avg_response_minutes ?? null)}
-          subtitle="Outside 10am–8pm UK"
+          label="After Hours Leads"
+          value={`${stl?.after_hours.total ?? 0}`}
+          subtitle="Leads outside 10am–8pm UK (excluded from STL)"
           color="#FBBF24"
           loading={loading}
         />
       </div>
 
-      {/* Contact Attempts & Dials Row */}
+      {/* KPI Targets Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard
-          label="Avg Contact Attempts"
-          value={fmt(stl?.avg_contact_attempts ?? null, "x")}
-          subtitle={`${stl?.leads_contacted ?? 0}/${stl?.total_leads ?? 0} leads contacted`}
-          color="#A855F7"
-          loading={loading}
-        />
         <KpiFlag
           label="Personal Dials / Day"
           value={dials?.personal_dials_per_day ?? null}

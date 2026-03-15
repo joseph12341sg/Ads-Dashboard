@@ -135,14 +135,12 @@ export async function GET(request: NextRequest) {
 
     // ═══════════════════════════════════════════
     // 4. Calculate speed-to-lead metrics
+    //    ONLY count leads that arrived during in-hours (10am-8pm UK)
     // ═══════════════════════════════════════════
     let inHoursTotal = 0;
     let inHoursWithin5Min = 0;
     let afterHoursTotal = 0;
-    let afterHoursWithin5Min = 0;
     const responseTimesInHours: number[] = [];
-    const responseTimesAfterHours: number[] = [];
-    let leadsWithCalls = 0;
     let totalContactAttempts = 0;
 
     for (const lead of leads) {
@@ -150,39 +148,28 @@ export async function GET(request: NextRequest) {
       const leadCreated = lead.date_created as string;
       if (!leadId || !leadCreated) continue;
 
-      const callData = callsByLead.get(leadId);
-      const callCount = totalCallsByLead.get(leadId) ?? 0;
-
-      if (callCount > 0) {
-        leadsWithCalls++;
-        totalContactAttempts += callCount;
-      }
-
       const inHours = isInHoursUK(leadCreated);
 
+      if (!inHours) {
+        // After-hours lead — count but skip speed-to-lead calc entirely
+        afterHoursTotal++;
+        continue;
+      }
+
+      // In-hours lead — counts toward speed-to-lead and contact attempts
+      inHoursTotal++;
+      const callCount = totalCallsByLead.get(leadId) ?? 0;
+      totalContactAttempts += callCount;
+
+      const callData = callsByLead.get(leadId);
       if (callData) {
         const leadTime = new Date(leadCreated).getTime();
         const firstCallTime = new Date(callData.firstCall).getTime();
         const diffMinutes = (firstCallTime - leadTime) / (1000 * 60);
 
-        // Only count positive diffs (call after lead creation)
         if (diffMinutes >= 0) {
-          if (inHours) {
-            inHoursTotal++;
-            responseTimesInHours.push(diffMinutes);
-            if (diffMinutes <= 5) inHoursWithin5Min++;
-          } else {
-            afterHoursTotal++;
-            responseTimesAfterHours.push(diffMinutes);
-            if (diffMinutes <= 5) afterHoursWithin5Min++;
-          }
-        }
-      } else {
-        // Lead exists but no call yet — still counts toward total
-        if (inHours) {
-          inHoursTotal++;
-        } else {
-          afterHoursTotal++;
+          responseTimesInHours.push(diffMinutes);
+          if (diffMinutes <= 5) inHoursWithin5Min++;
         }
       }
     }
@@ -199,14 +186,9 @@ export async function GET(request: NextRequest) {
           responseTimesInHours.length
         : null;
 
-    const avgResponseTimeAfterHours =
-      responseTimesAfterHours.length > 0
-        ? responseTimesAfterHours.reduce((a, b) => a + b, 0) /
-          responseTimesAfterHours.length
-        : null;
-
+    // Avg contact attempts = total calls ÷ in-hours leads only
     const avgContactAttempts =
-      leadsWithCalls > 0 ? totalContactAttempts / leadsWithCalls : null;
+      inHoursTotal > 0 ? totalContactAttempts / inHoursTotal : null;
 
     // ═══════════════════════════════════════════
     // 6. Calculate dials per day metrics
@@ -248,16 +230,10 @@ export async function GET(request: NextRequest) {
         },
         after_hours: {
           total: afterHoursTotal,
-          within_5_min: afterHoursWithin5Min,
-          percentage:
-            afterHoursTotal > 0
-              ? (afterHoursWithin5Min / afterHoursTotal) * 100
-              : null,
-          avg_response_minutes: avgResponseTimeAfterHours,
         },
         avg_contact_attempts: avgContactAttempts,
         total_leads: leads.length,
-        leads_contacted: leadsWithCalls,
+        leads_contacted: callsByLead.size,
       },
       dials: {
         total_calls: totalCalls,

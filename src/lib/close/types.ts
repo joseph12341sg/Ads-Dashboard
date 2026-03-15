@@ -74,9 +74,6 @@ export interface SpeedToLeadData {
     };
     after_hours: {
       total: number;
-      within_5_min: number;
-      percentage: number | null;
-      avg_response_minutes: number | null;
     };
     avg_contact_attempts: number | null;
     total_leads: number;
