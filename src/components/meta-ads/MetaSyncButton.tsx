@@ -11,14 +11,12 @@ interface SyncResult {
 
 interface MetaSyncButtonProps {
   syncDate: string;
-  campaignId?: string;
   onSyncSuccess: (data: SyncResult) => void;
   onSyncError: (error: string) => void;
 }
 
 export default function MetaSyncButton({
   syncDate,
-  campaignId,
   onSyncSuccess,
   onSyncError,
 }: MetaSyncButtonProps) {
@@ -32,7 +30,7 @@ export default function MetaSyncButton({
     try {
       // Fetch Meta and Close in parallel
       const [metaRes, closeRes] = await Promise.all([
-        fetch(`/api/meta-ads?date=${syncDate}${campaignId ? `&campaignId=${campaignId}` : ""}`),
+        fetch(`/api/meta-ads?date=${syncDate}`),
         fetch(`/api/close/calls-by-date?date=${syncDate}`).catch(() => null),
       ]);
 

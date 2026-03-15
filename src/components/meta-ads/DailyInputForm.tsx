@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import MetaSyncButton from "./MetaSyncButton";
-import CampaignSelector from "./CampaignSelector";
 import type { MetaAdsDailyRecord } from "@/lib/meta-ads/types";
 
 interface DailyInputFormProps {
@@ -38,8 +37,6 @@ export default function DailyInputForm({
   const [syncError, setSyncError] = useState("");
   const [wasSynced, setWasSynced] = useState(false);
   const [callsFromClose, setCallsFromClose] = useState(false);
-  const [selectedCampaignId, setSelectedCampaignId] = useState("");
-  const [selectedCampaignName, setSelectedCampaignName] = useState("");
 
   const [date, setDate] = useState(getYesterday());
   const [amountSpent, setAmountSpent] = useState("");
@@ -106,25 +103,6 @@ export default function DailyInputForm({
       {/* Sync Section */}
       {!editingRecord && (
         <>
-          {/* Campaign Selector */}
-          <div className="mb-3">
-            <label className="block text-[11px] text-[#A1A8B3] mb-1">
-              Campaign
-            </label>
-            <CampaignSelector
-              selectedCampaignId={selectedCampaignId}
-              onSelect={(id, name) => {
-                setSelectedCampaignId(id);
-                setSelectedCampaignName(name);
-              }}
-            />
-            {selectedCampaignName && (
-              <p className="text-[10px] text-[#A1A8B3]/60 mt-1 truncate">
-                ID: {selectedCampaignId}
-              </p>
-            )}
-          </div>
-
           <div className="flex flex-wrap items-center gap-3 mb-3">
             <input
               type="date"
@@ -135,7 +113,6 @@ export default function DailyInputForm({
             />
             <MetaSyncButton
               syncDate={syncDate}
-              campaignId={selectedCampaignId}
               onSyncSuccess={({ meta, closeCalls }) => {
                 if (meta) {
                   setDate(syncDate);
