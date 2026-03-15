@@ -123,36 +123,38 @@ export async function GET(request: NextRequest) {
 
   try {
     // ═══════════════════════════════════════════
-    // 1. Get Inbound Pipeline ID and status IDs
+    // 1. Get Inbound Pipeline status IDs to filter leads
     // ═══════════════════════════════════════════
-    const { pipelineId, statusIds } = await getInboundPipelineInfo(headers);
+    const { statusIds } = await getInboundPipelineInfo(headers);
 
-    if (!pipelineId) {
+    if (statusIds.length === 0) {
       return NextResponse.json({
         error: "Inbound Pipeline not found",
       }, { status: 404 });
     }
 
     // ═══════════════════════════════════════════
-    // 2. Fetch ALL opportunities ever created in the Inbound Pipeline
-    //    (using pipeline_id to include leads that may have moved out)
+    // 2. Fetch opportunities currently in the Inbound Pipeline
+    //    (using status_id to get only leads currently in the pipeline)
     // ═══════════════════════════════════════════
     const inboundLeadIds = new Set<string>();
     const leadCreatedDates = new Map<string, string>(); // lead_id -> earliest date_created
 
-    const opps = await fetchAllPages(
-      `https://api.close.com/api/v1/opportunity/?pipeline_id=${pipelineId}&_fields=lead_id,date_created`,
-      headers
-    );
-    for (const opp of opps) {
-      const leadId = opp.lead_id as string;
-      const dateCreated = opp.date_created as string;
-      if (!leadId) continue;
-      inboundLeadIds.add(leadId);
-      // Track earliest opportunity creation date per lead
-      const existing = leadCreatedDates.get(leadId);
-      if (!existing || dateCreated < existing) {
-        leadCreatedDates.set(leadId, dateCreated);
+    for (const statusId of statusIds) {
+      const opps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}&_fields=lead_id,date_created`,
+        headers
+      );
+      for (const opp of opps) {
+        const leadId = opp.lead_id as string;
+        const dateCreated = opp.date_created as string;
+        if (!leadId) continue;
+        inboundLeadIds.add(leadId);
+        // Track earliest opportunity creation date per lead
+        const existing = leadCreatedDates.get(leadId);
+        if (!existing || dateCreated < existing) {
+          leadCreatedDates.set(leadId, dateCreated);
+        }
       }
     }
 
