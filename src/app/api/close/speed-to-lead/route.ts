@@ -37,13 +37,20 @@ async function fetchAllPages(
 
 /* ── Check if timestamp is within UK working hours (10am-8pm) ── */
 function isInHoursUK(isoDate: string): boolean {
-  // Convert to UK time
   const date = new Date(isoDate);
   const ukTime = new Date(
     date.toLocaleString("en-US", { timeZone: "Europe/London" })
   );
   const hour = ukTime.getHours();
-  return hour >= 10 && hour < 20; // 10am to 8pm
+  return hour >= 10 && hour < 20;
+}
+
+function containsMatch(
+  actual: string | undefined | null,
+  substring: string
+): boolean {
+  if (!actual) return false;
+  return actual.trim().toLowerCase().includes(substring.trim().toLowerCase());
 }
 
 /* ── In-memory cache with 5-minute TTL ── */
@@ -58,6 +65,42 @@ function getCached(key: string) {
 
 function setCache(key: string, data: unknown) {
   cache.set(key, { data, ts: Date.now() });
+}
+
+/* ── Get Inbound Pipeline status IDs ── */
+let inboundStatusIds: string[] | null = null;
+
+async function getInboundStatusIds(
+  headers: Record<string, string>
+): Promise<string[]> {
+  if (inboundStatusIds) return inboundStatusIds;
+
+  const res = await fetch("https://api.close.com/api/v1/pipeline/", {
+    headers,
+  });
+  const data = await res.json();
+  const ids: string[] = [];
+
+  if (data.data && Array.isArray(data.data)) {
+    for (const pipeline of data.data) {
+      const name = (pipeline.name ?? "") as string;
+      if (
+        containsMatch(name, "Inbound Pipeline") ||
+        containsMatch(name, "00 |")
+      ) {
+        if (pipeline.statuses && Array.isArray(pipeline.statuses)) {
+          for (const s of pipeline.statuses) {
+            ids.push(s.id as string);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  inboundStatusIds = ids;
+  console.log(`[STL] Inbound Pipeline status IDs: ${ids.join(", ")}`);
+  return ids;
 }
 
 export async function GET(request: NextRequest) {
@@ -77,50 +120,101 @@ export async function GET(request: NextRequest) {
   if (cached) return NextResponse.json(cached);
 
   try {
-    // Build date filters
+    // ═══════════════════════════════════════════
+    // 1. Get Inbound Pipeline status IDs to filter leads
+    // ═══════════════════════════════════════════
+    const statusIds = await getInboundStatusIds(headers);
+
+    if (statusIds.length === 0) {
+      return NextResponse.json({
+        error: "Inbound Pipeline not found",
+      }, { status: 404 });
+    }
+
+    // ═══════════════════════════════════════════
+    // 2. Fetch all opportunities in the Inbound Pipeline
+    //    to get the lead_ids (these are the setting pipeline leads)
+    // ═══════════════════════════════════════════
+    const inboundLeadIds = new Set<string>();
+    const leadCreatedDates = new Map<string, string>(); // lead_id -> earliest date_created
+
+    for (const statusId of statusIds) {
+      const opps = await fetchAllPages(
+        `https://api.close.com/api/v1/opportunity/?status_id=${statusId}&_fields=lead_id,date_created`,
+        headers
+      );
+      for (const opp of opps) {
+        const leadId = opp.lead_id as string;
+        const dateCreated = opp.date_created as string;
+        if (!leadId) continue;
+        inboundLeadIds.add(leadId);
+        // Track earliest opportunity creation date per lead
+        const existing = leadCreatedDates.get(leadId);
+        if (!existing || dateCreated < existing) {
+          leadCreatedDates.set(leadId, dateCreated);
+        }
+      }
+    }
+
+    console.log(
+      `[STL] Found ${inboundLeadIds.size} leads in Inbound Pipeline`
+    );
+
+    // ═══════════════════════════════════════════
+    // 3. Fetch lead details for creation dates
+    //    (opportunity date_created may differ from lead date_created)
+    // ═══════════════════════════════════════════
+    // Fetch actual lead creation dates for the inbound leads
+    for (const leadId of Array.from(inboundLeadIds)) {
+      try {
+        const res = await fetch(
+          `https://api.close.com/api/v1/lead/${leadId}/?_fields=date_created`,
+          { headers }
+        );
+        const lead = await res.json();
+        if (lead.date_created) {
+          leadCreatedDates.set(leadId, lead.date_created as string);
+        }
+      } catch {
+        // Keep the opportunity date if lead fetch fails
+      }
+    }
+
+    // ═══════════════════════════════════════════
+    // 4. Fetch all outbound CALL activities
+    // ═══════════════════════════════════════════
     const dateFilter =
       start && end
         ? `date_created__gt=${start}T00:00:00&date_created__lt=${end}T23:59:59`
         : "";
 
-    // ═══════════════════════════════════════════
-    // 1. Fetch all LEADS created in the period
-    // ═══════════════════════════════════════════
-    const leadsUrl = dateFilter
-      ? `https://api.close.com/api/v1/lead/?${dateFilter}&_fields=id,date_created,display_name`
-      : `https://api.close.com/api/v1/lead/?_fields=id,date_created,display_name`;
-
-    const leads = await fetchAllPages(leadsUrl, headers);
-    console.log(`[STL] Found ${leads.length} leads`);
-
-    // ═══════════════════════════════════════════
-    // 2. Fetch all outbound CALL activities in the period
-    //    These are linked to leads via lead_id
-    // ═══════════════════════════════════════════
     const callsUrl = dateFilter
-      ? `https://api.close.com/api/v1/activity/call/?${dateFilter}&direction=outbound&_fields=lead_id,date_created,duration`
-      : `https://api.close.com/api/v1/activity/call/?direction=outbound&_fields=lead_id,date_created,duration`;
+      ? `https://api.close.com/api/v1/activity/call/?${dateFilter}&direction=outbound&_fields=lead_id,date_created`
+      : `https://api.close.com/api/v1/activity/call/?direction=outbound&_fields=lead_id,date_created`;
 
-    const calls = await fetchAllPages(callsUrl, headers);
-    console.log(`[STL] Found ${calls.length} outbound calls`);
+    const allCalls = await fetchAllPages(callsUrl, headers);
+
+    // Filter calls to ONLY those made to inbound pipeline leads
+    const calls = allCalls.filter((c) =>
+      inboundLeadIds.has(c.lead_id as string)
+    );
+
+    console.log(
+      `[STL] ${allCalls.length} total calls, ${calls.length} to inbound leads`
+    );
 
     // ═══════════════════════════════════════════
-    // 3. Build a map: lead_id -> all call timestamps + count
+    // 5. Build call maps for inbound leads only
     // ═══════════════════════════════════════════
     const callsByLead = new Map<
       string,
       { firstCall: string; callCount: number }
     >();
 
-    // Also count ALL calls per lead (not just in period) for avg contacts
-    const totalCallsByLead = new Map<string, number>();
-
     for (const call of calls) {
       const leadId = call.lead_id as string;
       const callDate = call.date_created as string;
       if (!leadId || !callDate) continue;
-
-      totalCallsByLead.set(leadId, (totalCallsByLead.get(leadId) ?? 0) + 1);
 
       const existing = callsByLead.get(leadId);
       if (!existing || callDate < existing.firstCall) {
@@ -134,8 +228,8 @@ export async function GET(request: NextRequest) {
     }
 
     // ═══════════════════════════════════════════
-    // 4. Calculate speed-to-lead metrics
-    //    ONLY count leads that arrived during in-hours (10am-8pm UK)
+    // 6. Calculate speed-to-lead (in-hours only)
+    //    and avg contact attempts (ALL inbound leads)
     // ═══════════════════════════════════════════
     let inHoursTotal = 0;
     let inHoursWithin5Min = 0;
@@ -143,25 +237,24 @@ export async function GET(request: NextRequest) {
     const responseTimesInHours: number[] = [];
     let totalContactAttempts = 0;
 
-    for (const lead of leads) {
-      const leadId = lead.id as string;
-      const leadCreated = lead.date_created as string;
-      if (!leadId || !leadCreated) continue;
+    for (const leadId of Array.from(inboundLeadIds)) {
+      const leadCreated = leadCreatedDates.get(leadId);
+      if (!leadCreated) continue;
+
+      // Count calls to this lead (for avg contact attempts across ALL inbound leads)
+      const callData = callsByLead.get(leadId);
+      totalContactAttempts += callData?.callCount ?? 0;
 
       const inHours = isInHoursUK(leadCreated);
 
       if (!inHours) {
-        // After-hours lead — count but skip speed-to-lead calc entirely
         afterHoursTotal++;
         continue;
       }
 
-      // In-hours lead — counts toward speed-to-lead and contact attempts
+      // In-hours lead — counts toward speed-to-lead
       inHoursTotal++;
-      const callCount = totalCallsByLead.get(leadId) ?? 0;
-      totalContactAttempts += callCount;
 
-      const callData = callsByLead.get(leadId);
       if (callData) {
         const leadTime = new Date(leadCreated).getTime();
         const firstCallTime = new Date(callData.firstCall).getTime();
@@ -175,7 +268,7 @@ export async function GET(request: NextRequest) {
     }
 
     // ═══════════════════════════════════════════
-    // 5. Calculate KPI values
+    // 7. Calculate KPI values
     // ═══════════════════════════════════════════
     const speedToLeadPct =
       inHoursTotal > 0 ? (inHoursWithin5Min / inHoursTotal) * 100 : null;
@@ -186,13 +279,14 @@ export async function GET(request: NextRequest) {
           responseTimesInHours.length
         : null;
 
-    // Avg contact attempts = total calls ÷ in-hours leads only
+    // Avg contact attempts = total calls ÷ ALL inbound pipeline leads
     const avgContactAttempts =
-      inHoursTotal > 0 ? totalContactAttempts / inHoursTotal : null;
+      inboundLeadIds.size > 0
+        ? totalContactAttempts / inboundLeadIds.size
+        : null;
 
     // ═══════════════════════════════════════════
-    // 6. Calculate dials per day metrics
-    //    Use the date range to determine number of working days
+    // 8. Dials per day metrics
     // ═══════════════════════════════════════════
     let workingDays = 1;
     if (start && end) {
@@ -202,22 +296,20 @@ export async function GET(request: NextRequest) {
       const current = new Date(s);
       while (current <= e) {
         const day = current.getDay();
-        if (day !== 0 && day !== 6) days++; // Exclude weekends
+        if (day !== 0 && day !== 6) days++;
         current.setDate(current.getDate() + 1);
       }
       workingDays = Math.max(days, 1);
     }
 
     const totalCalls = calls.length;
-    // Personal dials = total calls / working days (per person assumption)
     const personalDialsPerDay =
       workingDays > 0 ? totalCalls / workingDays : null;
 
-    // Office dials = total unique leads contacted per day
     const uniqueLeadsContacted = callsByLead.size;
     const officeDialsPerDay =
       workingDays > 0 && uniqueLeadsContacted > 0
-        ? totalCalls / workingDays / Math.max(uniqueLeadsContacted, 1) * uniqueLeadsContacted
+        ? totalCalls / workingDays
         : null;
 
     const result = {
@@ -232,8 +324,8 @@ export async function GET(request: NextRequest) {
           total: afterHoursTotal,
         },
         avg_contact_attempts: avgContactAttempts,
-        total_leads: leads.length,
-        leads_contacted: callsByLead.size,
+        total_leads: inboundLeadIds.size,
+        leads_contacted: uniqueLeadsContacted,
       },
       dials: {
         total_calls: totalCalls,
