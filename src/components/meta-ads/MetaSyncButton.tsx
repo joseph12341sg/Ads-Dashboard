@@ -37,7 +37,9 @@ export default function MetaSyncButton({
       const metaJson: MetaSyncResponse = await metaRes.json();
 
       if (!metaJson.success || !metaJson.data) {
-        onSyncError(metaJson.error || "Failed to sync from Meta");
+        const debugInfo = (metaJson as Record<string, unknown>).debug;
+        const debugStr = debugInfo ? ` | Debug: ${JSON.stringify(debugInfo)}` : "";
+        onSyncError((metaJson.error || "Failed to sync from Meta") + debugStr);
         setSyncing(false);
         return;
       }

@@ -52,6 +52,7 @@ export async function GET(request: NextRequest) {
           success: false,
           error:
             "No ad data found for this date. Ads may not have been running.",
+          debug: { campaignId, date, rawResponse: json },
         },
         { status: 200 }
       );
