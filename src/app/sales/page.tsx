@@ -7,6 +7,7 @@ import SectionHeader from "@/components/sales/SectionHeader";
 import SalesKpiRow from "@/components/sales/SalesKpiRow";
 import PipelineFunnel from "@/components/sales/PipelineFunnel";
 import RecentDealsTable from "@/components/sales/RecentDealsTable";
+import SpeedToLeadSection from "@/components/sales/SpeedToLeadSection";
 import {
   calculateSettingRates,
   calculateCloserRates,
@@ -155,6 +156,17 @@ export default function SalesPage() {
             { label: "Follow Up Needed", value: setting.funnel.follow_up_needed, color: "#FBBF24" },
             { label: "DQ/Not Interested", value: setting.funnel.dq_not_interested, color: "#F87171" },
           ]}
+        />
+
+        {/* Divider */}
+        <div className="border-t border-white/5" />
+
+        {/* ═══ SPEED TO LEAD & KPI TARGETS ═══ */}
+        <SpeedToLeadSection
+          dateStart={dateStart}
+          dateEnd={dateEnd}
+          bookingRate={settingRates.booking_rate}
+          showRate={closerRates.call_1_show_rate}
         />
 
         {/* Divider */}
