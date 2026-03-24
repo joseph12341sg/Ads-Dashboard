@@ -10,10 +10,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const accountId = process.env.META_AD_ACCOUNT_ID;
   const campaignId = process.env.META_CAMPAIGN_ID;
   const accessToken = process.env.META_ACCESS_TOKEN;
 
-  if (!campaignId || !accessToken) {
+  if (!accountId || !accessToken) {
     return NextResponse.json(
       { success: false, error: "Meta API credentials not configured" },
       { status: 500 }
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
   try {
     const timeRange = JSON.stringify({ since: date, until: date });
     const url = new URL(
-      `https://graph.facebook.com/v19.0/${campaignId}/insights`
+      `https://graph.facebook.com/v19.0/${accountId}/insights`
     );
     url.searchParams.set(
       "fields",
@@ -31,6 +32,14 @@ export async function GET(request: NextRequest) {
     );
     url.searchParams.set("time_range", timeRange);
     url.searchParams.set("level", "campaign");
+    if (campaignId) {
+      url.searchParams.set(
+        "filtering",
+        JSON.stringify([
+          { field: "campaign.id", operator: "IN", value: [campaignId] },
+        ])
+      );
+    }
     url.searchParams.set("access_token", accessToken);
 
     const res = await fetch(url.toString());
@@ -52,7 +61,6 @@ export async function GET(request: NextRequest) {
           success: false,
           error:
             "No ad data found for this date. Ads may not have been running.",
-          debug: { campaignId, date, rawResponse: json },
         },
         { status: 200 }
       );
