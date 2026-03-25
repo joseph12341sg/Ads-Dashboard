@@ -10,10 +10,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const accountId = process.env.META_AD_ACCOUNT_ID;
   const campaignId = process.env.META_CAMPAIGN_ID;
   const accessToken = process.env.META_ACCESS_TOKEN;
 
-  if (!campaignId || !accessToken) {
+  if (!accountId || !accessToken) {
     return NextResponse.json(
       { success: false, error: "Meta API credentials not configured" },
       { status: 500 }
@@ -22,15 +23,18 @@ export async function GET(request: NextRequest) {
 
   try {
     const timeRange = JSON.stringify({ since: date, until: date });
-    const url = new URL(
-      `https://graph.facebook.com/v19.0/${campaignId}/insights`
-    );
+
+    // Try campaign-level first if campaign ID is set, otherwise use account-level
+    const endpoint = campaignId
+      ? `https://graph.facebook.com/v21.0/${campaignId}/insights`
+      : `https://graph.facebook.com/v21.0/${accountId}/insights`;
+
+    const url = new URL(endpoint);
     url.searchParams.set(
       "fields",
       "spend,inline_link_clicks,actions,cost_per_action_type"
     );
     url.searchParams.set("time_range", timeRange);
-    url.searchParams.set("level", "campaign");
     url.searchParams.set("access_token", accessToken);
 
     const res = await fetch(url.toString());
